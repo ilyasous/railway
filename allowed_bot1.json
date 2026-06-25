@@ -1,0 +1,48 @@
+{
+  "groups": [
+    "120363422867950942@g.us"
+  ],
+  "trackedGroups": [
+    "120363244752698301@g.us",
+    "120363406223153184@g.us",
+    "120363352638152877@g.us",
+    "120363370851265381@g.us",
+    "120363369678594813@g.us",
+    "120363371136560814@g.us",
+    "120363405822939356@g.us",
+    "120363348897339049@g.us",
+    "120363405309727365@g.us",
+    "120363331395585600@g.us",
+    "120363026241000627@g.us",
+    "120363339111541859@g.us",
+    "120363039778671409@g.us",
+    "120363296727683107@g.us",
+    "120363353300425829@g.us",
+    "120363298586980557@g.us",
+    "120363239741904489@g.us",
+    "120363025805259756@g.us",
+    "120363399772888813@g.us",
+    "120363418642405258@g.us",
+    "120363405235727456@g.us",
+    "120363045428715369@g.us",
+    "120363407135902347@g.us",
+    "120363422867950942@g.us",
+    "120363182441614082@g.us",
+    "212694740540-1599686141@g.us",
+    "120363419575890570@g.us",
+    "120363407076928404@g.us"
+  ],
+  "features": {
+    "broadcast": true,
+    "antiDeletePrivate": true,
+    "antiDeleteGroup": true,
+    "statusForwarding": true,
+    "groupNotifications": true,
+    "commandAccess": "all",
+    "commandScope": "private_and_allowed_groups",
+    "alertsDestination": "allowed_groups",
+    "adminNotifications": true,
+    "groupMetaNotifications": false,
+    "contactPhotoNotifications": true
+  }
+}
