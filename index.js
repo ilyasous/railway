@@ -978,7 +978,6 @@ startWebServer({
   PORT,
   SERVER_NAME,
   SERVER_ROLE,
-  HA_TOKEN,
   bots,
   addNewBot,
   deleteBot,
