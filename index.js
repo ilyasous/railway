@@ -76,7 +76,8 @@ const {
   useMultiFileAuthState,
   fetchLatestBaileysVersion,
   DisconnectReason,
-  downloadMediaMessage
+  downloadMediaMessage,
+  WAMessageStubType
 } = require('@whiskeysockets/baileys');
 
 const PORT = process.env.PORT || 8080;
@@ -283,12 +284,17 @@ function isTrackedGroup(bot, groupJid) { return loadAllowedData(bot).trackedGrou
 function unwrapMessageContent(msg) {
   if (!msg?.message) return {};
   let content = msg.message;
-  if (content.deviceSentMessage?.message) content = content.deviceSentMessage.message;
-  if (content.ephemeralMessage?.message) content = content.ephemeralMessage.message;
-  if (content.documentWithCaptionMessage?.message) content = content.documentWithCaptionMessage.message;
-  if (content.viewOnceMessageV2?.message) content = content.viewOnceMessageV2.message;
-  else if (content.viewOnceMessage?.message) content = content.viewOnceMessage.message;
-  else if (content.viewOnceMessageV2Extension?.message) content = content.viewOnceMessageV2Extension.message;
+  for (let depth = 0; depth < 8; depth++) {
+    const nested =
+      content.deviceSentMessage?.message ||
+      content.ephemeralMessage?.message ||
+      content.documentWithCaptionMessage?.message ||
+      content.viewOnceMessageV2?.message ||
+      content.viewOnceMessage?.message ||
+      content.viewOnceMessageV2Extension?.message;
+    if (!nested || nested === content) break;
+    content = nested;
+  }
   return content;
 }
 
@@ -595,13 +601,42 @@ function detectMediaInfo(msg) {
   if (!content) return { hasMedia: false, mediaType: 'text', mimeType: '', extension: '.bin' };
   if (content.imageMessage) return { hasMedia: true, mediaType: 'image', mimeType: content.imageMessage.mimetype || 'image/jpeg', extension: '.jpg' };
   if (content.videoMessage) return { hasMedia: true, mediaType: 'video', mimeType: content.videoMessage.mimetype || 'video/mp4', extension: '.mp4' };
-  if (content.audioMessage) return { hasMedia: true, mediaType: 'audio', mimeType: content.audioMessage.mimetype || 'audio/ogg; codecs=opus', extension: '.ogg' };
+  if (content.ptvMessage) return { hasMedia: true, mediaType: 'video', mimeType: content.ptvMessage.mimetype || 'video/mp4', extension: '.mp4', ptv: true };
+  if (content.audioMessage) {
+    const mimeType = content.audioMessage.mimetype || 'audio/ogg; codecs=opus';
+    const extension = mimeType.includes('mpeg') ? '.mp3' : mimeType.includes('mp4') ? '.m4a' : '.ogg';
+    return { hasMedia: true, mediaType: 'audio', mimeType, extension, ptt: Boolean(content.audioMessage.ptt) };
+  }
   if (content.stickerMessage) return { hasMedia: true, mediaType: 'sticker', mimeType: content.stickerMessage.mimetype || 'image/webp', extension: '.webp' };
   if (content.documentMessage) {
     const fileName = content.documentMessage.fileName || '';
     return { hasMedia: true, mediaType: 'document', mimeType: content.documentMessage.mimetype || 'application/octet-stream', extension: path.extname(fileName) || '.bin', fileName };
   }
   return { hasMedia: false, mediaType: 'text', mimeType: '', extension: '.bin' };
+}
+
+function buildRecoveredMessage(msg) {
+  try {
+    const content = unwrapMessageContent(msg);
+    const clonedContent = typeof structuredClone === 'function'
+      ? structuredClone(content)
+      : JSON.parse(JSON.stringify(content));
+    return {
+      key: { ...msg.key, fromMe: false },
+      message: clonedContent,
+      messageTimestamp: msg.messageTimestamp,
+      pushName: msg.pushName
+    };
+  } catch (err) {
+    console.error('[ANTI-DELETE] Could not preserve original message:', err.message);
+    return null;
+  }
+}
+
+function shouldForwardRecoveredMessage(msg, mediaInfo) {
+  if (mediaInfo.hasMedia) return false;
+  const content = unwrapMessageContent(msg);
+  return Boolean(content && !content.conversation && !content.extendedTextMessage);
 }
 
 async function downloadMediaToFile(bot, msg, prefix = 'media') {
@@ -616,8 +651,20 @@ async function downloadMediaToFile(bot, msg, prefix = 'media') {
     const fileName = `${prefix}_${String(messageId).replace(/[^a-zA-Z0-9_-]/g, '_')}${info.extension}`;
     const filePath = path.join(DELETED_CACHE_FOLDER, fileName);
     fs.writeFileSync(filePath, buffer);
-    return { filePath, fileName, mediaType: info.mediaType, mimeType: info.mimeType, originalFileName: info.fileName || fileName, buffer };
-  } catch (err) { return null; }
+    return {
+      filePath,
+      fileName,
+      mediaType: info.mediaType,
+      mimeType: info.mimeType,
+      originalFileName: info.fileName || fileName,
+      ptt: Boolean(info.ptt),
+      ptv: Boolean(info.ptv),
+      buffer
+    };
+  } catch (err) {
+    console.error(`[ANTI-DELETE] Media cache failed for ${msg?.key?.id || 'unknown message'}:`, err.message);
+    return null;
+  }
 }
 
 function extractDeletedMessageKey(msg) {
@@ -629,13 +676,50 @@ function extractDeletedMessageKey(msg) {
 
 async function sendMediaIfExists(bot, targetJid, deletedInfo) {
   try {
-    if (!deletedInfo?.hasMedia || !deletedInfo?.mediaPath || !fs.existsSync(deletedInfo.mediaPath)) return;
+    if (!deletedInfo?.hasMedia || !deletedInfo?.mediaPath || !fs.existsSync(deletedInfo.mediaPath)) return false;
     const fileBuffer = fs.readFileSync(deletedInfo.mediaPath);
     if (deletedInfo.mediaType === 'image') await bot.sock.sendMessage(targetJid, { image: fileBuffer });
-    else if (deletedInfo.mediaType === 'video') await bot.sock.sendMessage(targetJid, { video: fileBuffer });
+    else if (deletedInfo.mediaType === 'video') await bot.sock.sendMessage(targetJid, { video: fileBuffer, ptv: Boolean(deletedInfo.ptv) });
+    else if (deletedInfo.mediaType === 'audio') await bot.sock.sendMessage(targetJid, { audio: fileBuffer, mimetype: deletedInfo.mimeType || 'audio/ogg; codecs=opus', ptt: Boolean(deletedInfo.ptt) });
     else if (deletedInfo.mediaType === 'sticker') await bot.sock.sendMessage(targetJid, { sticker: fileBuffer });
     else if (deletedInfo.mediaType === 'document') await bot.sock.sendMessage(targetJid, { document: fileBuffer, mimetype: deletedInfo.mimeType || 'application/octet-stream', fileName: deletedInfo.mediaFileName || 'deleted-file' });
-  } catch (err) { }
+    else return false;
+    return true;
+  } catch (err) {
+    console.error(`[ANTI-DELETE] Could not resend ${deletedInfo?.mediaType || 'media'} to ${targetJid}:`, err.message);
+    return false;
+  }
+}
+
+async function sendRecoveredMessage(bot, targetJid, deletedInfo) {
+  if (deletedInfo?.mediaCachePromise) {
+    try { await deletedInfo.mediaCachePromise; } catch (err) { }
+  }
+  const mediaSent = await sendMediaIfExists(bot, targetJid, deletedInfo);
+  const needsFallback = (deletedInfo?.hasMedia && !mediaSent) || deletedInfo?.forwardOriginal;
+  if (!needsFallback || !deletedInfo?.recoveredMessage) return;
+
+  try {
+    await bot.sock.sendMessage(targetJid, { forward: deletedInfo.recoveredMessage });
+  } catch (err) {
+    console.error(`[ANTI-DELETE] Could not forward recovered message to ${targetJid}:`, err.message);
+  }
+}
+
+function startDeletedMediaCache(bot, msg, prefix, deletedInfo) {
+  if (!deletedInfo?.hasMedia) return;
+  deletedInfo.mediaCachePromise = downloadMediaToFile(bot, msg, prefix)
+    .then((savedMedia) => {
+      if (!savedMedia) return null;
+      deletedInfo.mediaPath = savedMedia.filePath || '';
+      deletedInfo.mediaFileName = savedMedia.originalFileName || savedMedia.fileName || '';
+      deletedInfo.ptt = Boolean(savedMedia.ptt || deletedInfo.ptt);
+      deletedInfo.ptv = Boolean(savedMedia.ptv || deletedInfo.ptv);
+      return savedMedia;
+    })
+    .finally(() => {
+      deletedInfo.mediaCachePromise = null;
+    });
 }
 
 async function savePrivateMessage(bot, msg) {
@@ -644,12 +728,14 @@ async function savePrivateMessage(bot, msg) {
     if (!id) return;
     const storeKey = buildMessageStoreKey(id);
     const mediaInfo = detectMediaInfo(msg);
-    const savedMedia = mediaInfo.hasMedia ? await downloadMediaToFile(bot, msg, 'private') : null;
-
-    bot.privateMessagesStore.set(storeKey, {
+    const deletedInfo = {
       jid: msg?.key?.remoteJid || '', jidAlt: msg?.key?.remoteJidAlt || '', id, senderName: msg?.pushName || 'Nom inconnu', text: getTextFromMessage(msg), timestamp: msg?.messageTimestamp || Math.floor(Date.now() / 1000),
-      mediaType: mediaInfo.mediaType, mimeType: mediaInfo.mimeType, mediaPath: savedMedia?.filePath || '', mediaFileName: savedMedia?.originalFileName || savedMedia?.fileName || '', hasMedia: Boolean(savedMedia)
-    });
+      mediaType: mediaInfo.mediaType, mimeType: mediaInfo.mimeType, mediaPath: '', mediaFileName: mediaInfo.fileName || '',
+      hasMedia: mediaInfo.hasMedia, ptt: Boolean(mediaInfo.ptt), ptv: Boolean(mediaInfo.ptv),
+      recoveredMessage: buildRecoveredMessage(msg), forwardOriginal: shouldForwardRecoveredMessage(msg, mediaInfo)
+    };
+    bot.privateMessagesStore.set(storeKey, deletedInfo);
+    startDeletedMediaCache(bot, msg, 'private', deletedInfo);
   } catch (err) { console.error('Erreur savePrivateMessage:', err); } // AJOUTÉ
 }
 
@@ -660,7 +746,7 @@ async function sendDeletedPrivateMessageReport(bot, originalChatJid, deletedInfo
 
   const report = ['🚨 *Message privé supprimé détecté*', '', `👤 *Nom:* ${deletedInfo.senderName}`, `📱 *Chat privé:* ${originalChatJid || 'inconnu'}`, `🕒 *Heure:* ${getReadableTimestamp(deletedInfo.timestamp)}`, `📎 *Média:* ${deletedInfo.hasMedia ? deletedInfo.mediaType : 'aucun'}`, '', '📝 *Contenu du message:*', deletedInfo.text ? deletedInfo.text : '[aucun texte]'].join('\n');
   for (const targetJid of targetJids) {
-    try { await bot.sock.sendMessage(targetJid, { text: report }); await sendMediaIfExists(bot, targetJid, deletedInfo); } catch (err) { }
+    try { await bot.sock.sendMessage(targetJid, { text: report }); await sendRecoveredMessage(bot, targetJid, deletedInfo); } catch (err) { console.error(`[ANTI-DELETE] Private deletion report failed for ${targetJid}:`, err.message); }
   }
 }
 
@@ -671,12 +757,14 @@ async function saveTrackedGroupMessage(bot, msg) {
     if (!groupJid || !messageId || !isTrackedGroup(bot, groupJid)) return;
     const storeKey = buildTrackedGroupMessageStoreKey(groupJid, messageId);
     const mediaInfo = detectMediaInfo(msg);
-    const savedMedia = mediaInfo.hasMedia ? await downloadMediaToFile(bot, msg, 'group') : null;
-
-    bot.trackedGroupMessagesStore.set(storeKey, {
+    const deletedInfo = {
       groupJid, groupName: getKnownGroupName(bot, groupJid), messageId, senderParticipant: msg?.key?.participant || msg?.participant || 'participant inconnu', senderName: msg?.pushName || 'Nom inconnu', text: getTextFromMessage(msg), timestamp: msg?.messageTimestamp || Math.floor(Date.now() / 1000),
-      mediaType: mediaInfo.mediaType, mimeType: mediaInfo.mimeType, mediaPath: savedMedia?.filePath || '', mediaFileName: savedMedia?.originalFileName || savedMedia?.fileName || '', hasMedia: Boolean(savedMedia)
-    });
+      mediaType: mediaInfo.mediaType, mimeType: mediaInfo.mimeType, mediaPath: '', mediaFileName: mediaInfo.fileName || '',
+      hasMedia: mediaInfo.hasMedia, ptt: Boolean(mediaInfo.ptt), ptv: Boolean(mediaInfo.ptv),
+      recoveredMessage: buildRecoveredMessage(msg), forwardOriginal: shouldForwardRecoveredMessage(msg, mediaInfo)
+    };
+    bot.trackedGroupMessagesStore.set(storeKey, deletedInfo);
+    startDeletedMediaCache(bot, msg, 'group', deletedInfo);
   } catch (err) { console.error('Erreur saveTrackedGroupMessage:', err); } // AJOUTÉ
 }
 
@@ -687,8 +775,36 @@ async function sendDeletedTrackedGroupMessageReport(bot, deletedInfo) {
 
   const report = ['🚨 *Message supprimé dans un groupe tracké*', '', `👥 *Groupe:* ${deletedInfo.groupName}`, `👤 *Auteur:* ${deletedInfo.senderName}`, `📱 *Participant:* ${deletedInfo.senderParticipant}`, `🕒 *Heure:* ${getReadableTimestamp(deletedInfo.timestamp)}`, `📎 *Média:* ${deletedInfo.hasMedia ? deletedInfo.mediaType : 'aucun'}`, '', '📝 *Contenu du message:*', deletedInfo.text ? deletedInfo.text : '[aucun texte]'].join('\n');
   for (const targetJid of targetJids) {
-    try { await bot.sock.sendMessage(targetJid, { text: report }); await sendMediaIfExists(bot, targetJid, deletedInfo); } catch (err) { }
+    try { await bot.sock.sendMessage(targetJid, { text: report }); await sendRecoveredMessage(bot, targetJid, deletedInfo); } catch (err) { console.error(`[ANTI-DELETE] Group deletion report failed for ${targetJid}:`, err.message); }
   }
+}
+
+async function recoverDeletedMessage(bot, deletedKey) {
+  const messageId = deletedKey?.id || '';
+  const chatJid = deletedKey?.jid || deletedKey?.remoteJid || '';
+  const chatJidAlt = deletedKey?.jidAlt || deletedKey?.remoteJidAlt || '';
+  if (!messageId) return false;
+
+  const saved = loadAllowedData(bot);
+  const groupJid = isGroupJid(chatJid) ? chatJid : (isGroupJid(chatJidAlt) ? chatJidAlt : '');
+
+  if (groupJid) {
+    if (!saved.features.antiDeleteGroup || !isTrackedGroup(bot, groupJid)) return false;
+    const storeKey = buildTrackedGroupMessageStoreKey(groupJid, messageId);
+    const deletedInfo = bot.trackedGroupMessagesStore.get(storeKey);
+    if (!deletedInfo) return false;
+    bot.trackedGroupMessagesStore.delete(storeKey);
+    await sendDeletedTrackedGroupMessageReport(bot, deletedInfo);
+    return true;
+  }
+
+  if (!saved.features.antiDeletePrivate) return false;
+  const storeKey = buildMessageStoreKey(messageId);
+  const deletedInfo = bot.privateMessagesStore.get(storeKey);
+  if (!deletedInfo) return false;
+  bot.privateMessagesStore.delete(storeKey);
+  await sendDeletedPrivateMessageReport(bot, deletedInfo.jidAlt || deletedInfo.jid || chatJidAlt || chatJid || 'chat inconnu', deletedInfo);
+  return true;
 }
 
 function canUseCommandsInThisChat(bot, jid, saved, groupMessage, privateMessage) {
@@ -1077,6 +1193,22 @@ async function startBot(bot) {
 
     bot.sock.ev.on('creds.update', saveCreds);
 
+    bot.sock.ev.on('messages.update', async (updates) => {
+      for (const { key, update } of updates || []) {
+        if (update?.messageStubType !== WAMessageStubType.REVOKE) continue;
+        try {
+          await recoverDeletedMessage(bot, {
+            id: key?.id || '',
+            jid: key?.remoteJid || '',
+            jidAlt: key?.remoteJidAlt || '',
+            participant: key?.participant || ''
+          });
+        } catch (err) {
+          console.error(`[ANTI-DELETE] messages.update recovery failed for ${key?.id || 'unknown message'}:`, err.message);
+        }
+      }
+    });
+
     bot.sock.ev.on('group-participants.update', async (update) => {
       const { id, participants, action } = update;
       try {
@@ -1256,11 +1388,7 @@ async function startBot(bot) {
               await savePrivateMessage(bot, msg);
             } else {
               const deletedKey = extractDeletedMessageKey(msg);
-              if (deletedKey?.id && saved.features.antiDeletePrivate) {
-                const storeKey = buildMessageStoreKey(deletedKey.id);
-                const deletedInfo = bot.privateMessagesStore.get(storeKey);
-                if (deletedInfo) await sendDeletedPrivateMessageReport(bot, deletedInfo.jidAlt || deletedInfo.jid || deletedKey.jidAlt || deletedKey.jid || 'chat inconnu', deletedInfo);
-              }
+              if (Number(protocol.type) === 0) await recoverDeletedMessage(bot, deletedKey);
               continue;
             }
           }
@@ -1273,11 +1401,7 @@ async function startBot(bot) {
                 await saveTrackedGroupMessage(bot, msg);
               } else {
                 const deletedKey = extractDeletedMessageKey(msg);
-                if (deletedKey?.jid && deletedKey?.id && saved.features.antiDeleteGroup && isTrackedGroup(bot, deletedKey.jid)) {
-                  const groupStoreKey = buildTrackedGroupMessageStoreKey(deletedKey.jid, deletedKey.id);
-                  const deletedInfo = bot.trackedGroupMessagesStore.get(groupStoreKey);
-                  if (deletedInfo) await sendDeletedTrackedGroupMessageReport(bot, deletedInfo);
-                }
+                if (Number(protocol.type) === 0) await recoverDeletedMessage(bot, deletedKey);
                 continue;
               }
             }
