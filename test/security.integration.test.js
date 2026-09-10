@@ -28,17 +28,18 @@ before(async () => {
   dataDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'serveur-railway-test-'));
   const requestedPort = 19000 + Math.floor(Math.random() * 1000);
   baseUrl = 'http://127.0.0.1:' + requestedPort;
+  const childEnvironment = {
+    ...process.env,
+    PORT: String(requestedPort),
+    APP_DATA_DIR: dataDirectory,
+    ALLOWED_HOSTS: '127.0.0.1',
+    WEB_ADMIN_USER: 'ci-admin',
+    WEB_ADMIN_PASSWORD: 'integration-only-password'
+  };
+  delete childEnvironment.TURNSTILE_SITE_KEY;
+  delete childEnvironment.TURNSTILE_SECRET_KEY;
   child = spawn(process.execPath, [path.join(__dirname, 'fixtures', 'web-server.js')], {
-    env: {
-      ...process.env,
-      PORT: String(requestedPort),
-      APP_DATA_DIR: dataDirectory,
-      ALLOWED_HOSTS: '127.0.0.1',
-      WEB_ADMIN_USER: 'ci-admin',
-      WEB_ADMIN_PASSWORD: 'integration-only-password',
-      TURNSTILE_SITE_KEY: '1x00000000000000000000AA',
-      TURNSTILE_SECRET_KEY: '1x0000000000000000000000000000000AA'
-    },
+    env: childEnvironment,
     stdio: ['ignore', 'pipe', 'pipe']
   });
   await waitForServer(baseUrl);
@@ -94,6 +95,27 @@ test('login rejects a missing CSRF token', async () => {
     body: 'name=ci-admin&password=integration-only-password'
   });
   assert.equal(response.status, 403);
+});
+
+test('login is available with only the two web credential variables', async () => {
+  const loginResponse = await fetch(baseUrl + '/login');
+  const loginPage = await loginResponse.text();
+  assert.equal(loginResponse.status, 200);
+  assert.doesNotMatch(loginPage, /cf-turnstile|challenges\.cloudflare\.com/);
+
+  const csrfToken = loginPage.match(/name="_csrf" value="([^"]+)"/)?.[1];
+  assert.ok(csrfToken);
+  const response = await fetch(baseUrl + '/login', {
+    method: 'POST',
+    redirect: 'manual',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      name: 'ci-admin',
+      password: 'wrong-password',
+      _csrf: csrfToken
+    })
+  });
+  assert.equal(response.status, 401);
 });
 
 test('oversized form bodies are rejected', async () => {

@@ -34,6 +34,7 @@ const DEFAULT_ALLOWED_HOSTS = '';
 const ALLOW_LOCALHOST_HOSTS = String(process.env.ALLOW_LOCALHOST_HOSTS || 'true').toLowerCase() !== 'false';
 const TURNSTILE_SITE_KEY = String(process.env.TURNSTILE_SITE_KEY || '').trim();
 const TURNSTILE_SECRET_KEY = String(process.env.TURNSTILE_SECRET_KEY || '').trim();
+const TURNSTILE_ENABLED = Boolean(TURNSTILE_SITE_KEY && TURNSTILE_SECRET_KEY);
 const PASSWORD_HASH = {
   algorithm: 'scrypt',
   keyLength: 64,
@@ -422,9 +423,7 @@ function isValidLoginCsrfToken(token) {
 }
 
 async function verifyTurnstile(req) {
-  if (!TURNSTILE_SITE_KEY || !TURNSTILE_SECRET_KEY) {
-    return { ok: false, status: 503, message: 'Security check is not configured.' };
-  }
+  if (!TURNSTILE_ENABLED) return { ok: true };
   const token = String(req.body['cf-turnstile-response'] || '');
   if (!token) return { ok: false, status: 400, message: 'Security check missing. Please try again.' };
 
@@ -456,7 +455,7 @@ function applySecurityHeaders(req, res, next) {
   res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
   res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(), usb=()');
-  res.setHeader('Content-Security-Policy', [
+  const contentSecurityPolicy = [
     "default-src 'self'",
     "base-uri 'self'",
     "form-action 'self'",
@@ -465,10 +464,15 @@ function applySecurityHeaders(req, res, next) {
     "img-src 'self' data:",
     "font-src 'self' https://fonts.gstatic.com",
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-    "script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com",
-    "frame-src https://challenges.cloudflare.com",
-    "connect-src 'self' https://challenges.cloudflare.com"
-  ].join('; '));
+    TURNSTILE_ENABLED
+      ? "script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com"
+      : "script-src 'self' 'unsafe-inline'",
+    TURNSTILE_ENABLED ? "frame-src https://challenges.cloudflare.com" : "frame-src 'none'",
+    TURNSTILE_ENABLED
+      ? "connect-src 'self' https://challenges.cloudflare.com"
+      : "connect-src 'self'"
+  ];
+  res.setHeader('Content-Security-Policy', contentSecurityPolicy.join('; '));
   next();
 }
 
@@ -1044,16 +1048,16 @@ function buildLoginPage({ error = '', nextPath = '/dashboard', user = '', csrfTo
             <label for="login-password">Mot de passe</label>
             <input id="login-password" type="password" name="password" autocomplete="current-password" required />
           </div>
-          <div class="turnstile-wrap">
+          ${TURNSTILE_ENABLED ? `<div class="turnstile-wrap">
             <div class="cf-turnstile" data-sitekey="${escapeHtml(TURNSTILE_SITE_KEY)}" data-theme="auto"></div>
-          </div>
+          </div>` : ''}
           <button class="btn-primary login-button" type="submit">Se connecter</button>
         </form>
         <div class="login-footnote">Session protegee pendant 12 heures.</div>
       </section>
     </section>
   </main>
-  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+  ${TURNSTILE_ENABLED ? '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>' : ''}
 </body></html>`;
 }
 

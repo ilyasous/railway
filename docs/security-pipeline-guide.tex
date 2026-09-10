@@ -235,7 +235,8 @@ The suite currently proves:
   \item CSP, clickjacking, MIME-sniffing, and permissions headers are present;
   \item unapproved \texttt{Host} headers are rejected;
   \item protected APIs reject anonymous requests;
-  \item login rejects a missing CSRF token; and
+  \item login rejects a missing CSRF token;
+  \item login remains available when only the two web credential variables are configured; and
   \item form bodies over 10 KB are rejected.
 \end{itemize}
 
@@ -245,12 +246,12 @@ The suite currently proves:
 \begin{lstlisting}
 npm test
 \end{lstlisting}
-The expected result is \texttt{tests 6}, \texttt{pass 6}, \texttt{fail 0}.
+The expected result is \texttt{tests 7}, \texttt{pass 7}, \texttt{fail 0}.
 
 \section{Required one-time Railway and GitHub setup}
 
 \begin{enumerate}
-  \item In Railway, set real \texttt{WEB\_ADMIN\_USER}, \texttt{WEB\_ADMIN\_PASSWORD}, \texttt{TURNSTILE\_SITE\_KEY}, and \texttt{TURNSTILE\_SECRET\_KEY} variables. Do not commit them. If \texttt{auth.json} already exists on a persistent volume, plan credential rotation separately.
+  \item In Railway, set only \texttt{WEB\_ADMIN\_USER} and \texttt{WEB\_ADMIN\_PASSWORD} as required service variables. Do not commit them. Server name, role, allowed hosts, and WhatsApp use their built-in defaults. Turnstile is optional and is enabled only when both Turnstile keys are configured. If \texttt{auth.json} already exists on a persistent volume, plan credential rotation separately.
   \item In the Railway service connected to \texttt{main}, enable \textbf{Wait for CI}. Without this dashboard switch, GitHub can report failure but Railway may already have started an automatic deployment.
   \item Protect \texttt{main} in GitHub and require the status check \textbf{All 13 DevSecOps stages} before merge. Prevent administrators from bypassing it unless emergency policy explicitly permits that.
   \item Ensure GitHub artifact attestations are available for the repository plan. Public repositories are supported broadly; private/internal availability can depend on the GitHub plan. A missing capability intentionally makes stage 9 fail closed.

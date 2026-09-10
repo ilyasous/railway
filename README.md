@@ -19,10 +19,12 @@ The full container, SBOM, provenance, signing, IaC, secret, SAST, SCA, and OWASP
 
 1. Connect Railway to the `main` branch.
 2. In the Railway service settings, enable **Wait for CI**. This dashboard setting is required; the repository cannot enable it for you.
-3. Set real `WEB_ADMIN_USER`, `WEB_ADMIN_PASSWORD`, `TURNSTILE_SITE_KEY`, and `TURNSTILE_SECRET_KEY` Railway variables.
+3. Set only `WEB_ADMIN_USER` and `WEB_ADMIN_PASSWORD` as Railway service variables.
 4. Protect `main` in GitHub and require the **All 13 DevSecOps stages** status check.
 
 Railway uses [Dockerfile](Dockerfile) and checks `/health` according to [railway.json](railway.json). Runtime credentials and WhatsApp state are excluded from the container build context.
+
+`SERVER_NAME`, `SERVER_ROLE`, `WHATSAPP_ENABLED`, and `ALLOWED_HOSTS` already have built-in defaults and do not need Railway variables. Cloudflare Turnstile is optional: it is enabled only when both `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET_KEY` are configured.
 
 ## Documentation
 
