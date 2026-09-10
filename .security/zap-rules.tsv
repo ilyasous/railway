@@ -1,0 +1,7 @@
+10015	FAIL	Cache-control headers must prevent storage of sensitive pages
+10020	FAIL	Anti-clickjacking header is mandatory
+10021	FAIL	X-Content-Type-Options header is mandatory
+10035	FAIL	HTTP Strict Transport Security header is mandatory
+10036	FAIL	Server version disclosure is forbidden
+10037	FAIL	X-Powered-By technology disclosure is forbidden
+10038	FAIL	Content Security Policy header is mandatory

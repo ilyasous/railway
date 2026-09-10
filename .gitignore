@@ -1,2 +1,8 @@
 .env
 node_modules/
+logs/
+security-reports/
+auth_info_*/
+bots.json
+deleted_cache/
+*.tmp

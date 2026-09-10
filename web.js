@@ -32,8 +32,8 @@ const AUTH_ROUTE_RATE_LIMIT_MAX = Number(process.env.AUTH_ROUTE_RATE_LIMIT_MAX |
 const BOT_AUTH_RATE_LIMIT_MAX = Number(process.env.BOT_AUTH_RATE_LIMIT_MAX || 12);
 const DEFAULT_ALLOWED_HOSTS = '';
 const ALLOW_LOCALHOST_HOSTS = String(process.env.ALLOW_LOCALHOST_HOSTS || 'true').toLowerCase() !== 'false';
-const TURNSTILE_SITE_KEY = process.env.TURNSTILE_SITE_KEY || '0x4AAAAAADOJ-PZpGS3lgZip';
-const TURNSTILE_SECRET_KEY = process.env.TURNSTILE_SECRET_KEY || '0x4AAAAAADOJ-Lvp8Awu8r1Gfz4kmh--AyM';
+const TURNSTILE_SITE_KEY = String(process.env.TURNSTILE_SITE_KEY || '').trim();
+const TURNSTILE_SECRET_KEY = String(process.env.TURNSTILE_SECRET_KEY || '').trim();
 const PASSWORD_HASH = {
   algorithm: 'scrypt',
   keyLength: 64,
@@ -198,7 +198,12 @@ function normalizeWebAuth(parsed) {
 function loadWebAuth() {
   try {
     if (!fs.existsSync(AUTH_WEB_FILE)) {
-      const initial = { version: 2, users: [createUserRecord(process.env.WEB_ADMIN_USER || 'admin', process.env.WEB_ADMIN_PASSWORD || 'admin')] };
+      const initialUser = String(process.env.WEB_ADMIN_USER || '').trim();
+      const initialPassword = String(process.env.WEB_ADMIN_PASSWORD || '');
+      if (!initialUser || !initialPassword) {
+        throw new Error('WEB_ADMIN_USER and WEB_ADMIN_PASSWORD are required when auth.json does not exist.');
+      }
+      const initial = { version: 2, users: [createUserRecord(initialUser, initialPassword)] };
       const changed = applyCredentialChangeFile(initial);
       if (changed === initial) saveJsonSecure(AUTH_WEB_FILE, initial);
       return changed;
@@ -209,6 +214,7 @@ function loadWebAuth() {
     if (normalized.shouldSave) saveJsonSecure(AUTH_WEB_FILE, normalized.auth);
     return applyCredentialChangeFile(normalized.auth);
   } catch (err) {
+    console.error('[SECURITY] Web authentication unavailable:', err.message);
     return { version: 2, users: [] };
   }
 }
@@ -416,6 +422,9 @@ function isValidLoginCsrfToken(token) {
 }
 
 async function verifyTurnstile(req) {
+  if (!TURNSTILE_SITE_KEY || !TURNSTILE_SECRET_KEY) {
+    return { ok: false, status: 503, message: 'Security check is not configured.' };
+  }
   const token = String(req.body['cf-turnstile-response'] || '');
   if (!token) return { ok: false, status: 400, message: 'Security check missing. Please try again.' };
 
@@ -1827,5 +1836,5 @@ ${shellClose()}`);
     res.redirect(`/${botId}/grouptracked`);
   });
 
-  app.listen(PORT, () => console.log(`Serveur Web tournant sur le port ${PORT}`));
+  return app.listen(PORT, () => console.log(`Serveur Web tournant sur le port ${PORT}`));
 };

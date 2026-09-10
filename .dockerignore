@@ -1,0 +1,16 @@
+.git
+.github
+.env
+node_modules
+security-reports
+docs
+logs
+auth.json
+change.json
+allowed*.json
+auth_info_*
+bots.json
+deleted_cache
+test
+*.tmp
+*.log

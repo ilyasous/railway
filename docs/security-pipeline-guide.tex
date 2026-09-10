@@ -1,0 +1,292 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=18mm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{tabularx}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{microtype}
+\usepackage{amssymb}
+
+\definecolor{navy}{HTML}{10233F}
+\definecolor{blue}{HTML}{1769AA}
+\definecolor{green}{HTML}{167D4A}
+\definecolor{red}{HTML}{B42318}
+\definecolor{light}{HTML}{F2F6FA}
+\definecolor{codegray}{HTML}{263238}
+
+\hypersetup{colorlinks=true,linkcolor=blue,urlcolor=blue,pdftitle={13-Stage Pre-Deployment Security Gate},pdfauthor={Serveur Railway project}}
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{Serveur Railway}
+\rhead{Pre-deployment security guide}
+\cfoot{\thepage}
+\setlength{\headheight}{14pt}
+\setlength{\emergencystretch}{2em}
+\setlist[itemize]{leftmargin=5mm,itemsep=2pt,topsep=3pt}
+\setlist[enumerate]{leftmargin=6mm,itemsep=2pt,topsep=3pt}
+\lstset{basicstyle=\ttfamily\small,backgroundcolor=\color{light},frame=single,rulecolor=\color{light},breaklines=true,columns=fullflexible,showstringspaces=false,xleftmargin=2mm,xrightmargin=2mm,aboveskip=4pt,belowskip=5pt}
+
+\newcommand{\stage}[2]{\section{#1. #2}}
+\newcommand{\pass}{\textcolor{green}{\textbf{PASS}}}
+\newcommand{\fail}{\textcolor{red}{\textbf{FAIL}}}
+\newcommand{\evidence}[1]{\textbf{Evidence:} \texttt{#1}}
+
+\begin{document}
+
+\begin{titlepage}
+\pagecolor{navy}
+\color{white}
+\vspace*{25mm}
+{\Huge\bfseries 13-Stage Pre-Deployment\\[3mm]Security Gate\par}
+\vspace{8mm}
+{\Large Implementation and verification guide\par}
+\vspace{4mm}
+{\large Serveur Railway -- Node.js / Express / Railway\par}
+\vfill
+\begin{tabular}{ll}
+Pipeline file: & \texttt{.github/workflows/security.yml}\\
+Deployment target: & Railway\\
+Guide date: & 10 September 2026\\
+\end{tabular}
+\vspace{20mm}
+\end{titlepage}
+\nopagecolor
+\color{black}
+
+\tableofcontents
+\newpage
+
+\section{What was implemented}
+
+Every push to \texttt{main}, every pull request, the weekly schedule, and every manual run starts one GitHub Actions job named \textbf{All 13 DevSecOps stages}. Component steps use \texttt{continue-on-error} so one failure does not hide the results of later independent tests. The final \textbf{Evaluate final deployment gate} step reads every outcome and fails the whole job if any required stage did not pass.
+
+The pipeline builds the container once, scans that candidate, generates its SBOM, attests it, signs it, and runs ZAP against that same image. Pull requests run all testable checks; SLSA provenance and keyless signing run only for release-capable, non-PR executions because they require GitHub OIDC identity.
+
+\subsection{Files added or changed}
+
+\begin{longtable}{p{0.38\textwidth}p{0.56\textwidth}}
+\toprule
+\textbf{File} & \textbf{Purpose}\\
+\midrule
+\endhead
+\texttt{.github/workflows/security.yml} & Orchestrates and enforces all thirteen stages.\\
+\texttt{Dockerfile}, \texttt{.dockerignore} & Reproducible non-root candidate used by CI and Railway.\\
+\texttt{railway.json} & Selects the Dockerfile and configures \texttt{/health}.\\
+\texttt{.security/semgrep/rules.yml} & Project SAST rules.\\
+\texttt{.security/license-policy.json} & Approved and denied license identifiers.\\
+\texttt{.security/security-policy.json} & Machine-readable repository and container requirements.\\
+\texttt{scripts/check-*.js} & Syntax, license, and policy evaluators.\\
+\texttt{scripts/verify-security-gate.js} & Final fail-closed aggregation and summary.\\
+\texttt{test/security.integration.test.js} & Six HTTP security integration tests.\\
+\bottomrule
+\end{longtable}
+
+\section{How to tell whether deployment is allowed}
+
+\begin{enumerate}
+  \item Open the repository on GitHub and select \textbf{Actions} $\rightarrow$ \textbf{Pre-deployment security gate}.
+  \item Open the run for the exact commit you intend to deploy.
+  \item Confirm \textbf{All 13 DevSecOps stages} is green and its final step says \texttt{SECURITY GATE PASSED}.
+  \item Read the run summary table: each numbered row must say \texttt{success}. On a pull request only, stages 9 and 10 may say \texttt{skipped}; they will run on the subsequent push to \texttt{main}.
+  \item Download \texttt{security-reports-<commit SHA>} from the run's \textbf{Artifacts} section when detailed evidence is needed. The authoritative machine result is \texttt{gate-summary.json}.
+\end{enumerate}
+
+\textbf{Important:} a green workflow blocks Railway only after \textbf{Wait for CI} is enabled for the production service. In Railway, open the service, go to its deployment/source settings, enable \textbf{Wait for CI}, and ensure the connected deployment branch is \texttt{main}. Railway then holds the deployment in \texttt{WAITING} until this workflow finishes. See \href{https://docs.railway.com/deployments/github-autodeploys}{Railway: Controlling GitHub Autodeploys}.
+
+\stage{1}{Secrets detection}
+
+\textbf{Purpose.} TruffleHog examines the complete Git history, not only the current files, for credentials that can be verified against their provider. This catches a token even if a later commit deleted it.
+
+\textbf{Pass rule.} The scanner exits zero and finds no verified secret. \evidence{secrets.txt} plus the stage log.
+
+\textbf{How to verify.} Expand \textbf{1 - Secrets detection (TruffleHog)} and confirm the step is green. If it fails, revoke and rotate the credential first, remove it from current files, and clean Git history where appropriate. Merely deleting the latest copy is insufficient.
+
+\stage{2}{Code quality}
+
+\textbf{Purpose.} Node checks every project JavaScript file for parse errors, then ESLint enforces correctness and dangerous-language rules such as no \texttt{eval}, no implied evaluation, unreachable-code checks, and invalid control flow.
+
+\textbf{Pass rule.} Both \texttt{npm run syntax} and \texttt{npm run lint} exit zero. \evidence{code-quality.txt}.
+
+\textbf{Local verification.}
+\begin{lstlisting}
+npm ci
+npm run check
+\end{lstlisting}
+The last command must exit with code 0 and show no ESLint errors.
+
+\stage{3}{SAST -- static application security testing}
+
+\textbf{Purpose.} Semgrep analyzes source structure without running the application. The checked-in rules reject dynamic evaluation, shell-based child-process execution, weak MD5/SHA-1 password hashing, and a known default administrator password.
+
+\textbf{Pass rule.} No rule with severity \texttt{ERROR} matches. \evidence{sast.json}.
+
+\textbf{How to verify.} A passing report has an empty \texttt{results} array and the step exits zero. A finding contains a rule ID, path, and line number; fix the data flow or unsafe API rather than suppressing the rule without review.
+
+\stage{4}{SCA -- dependency vulnerability analysis}
+
+\textbf{Purpose.} Two independent databases inspect the locked dependency tree: npm Advisory Database through \texttt{npm audit}, and OSV through OSV-Scanner. Production high/critical vulnerabilities block release.
+
+\textbf{Pass rule.} Both scanners exit zero. \evidence{npm-audit.json} and \texttt{osv.txt}.
+
+\textbf{Local verification.}
+\begin{lstlisting}
+npm ci
+npm audit --omit=dev --audit-level=high
+\end{lstlisting}
+At implementation time this command reports zero known vulnerabilities. A future advisory can correctly turn a previously green commit red; update or replace the affected dependency and rerun the gate.
+
+\stage{5}{Infrastructure as code scan}
+
+\textbf{Purpose.} Trivy's configuration scanner checks the Dockerfile, workflow, and supported configuration for high/critical deployment misconfiguration.
+
+\textbf{Pass rule.} No high or critical IaC finding. \evidence{iac.json}.
+
+\textbf{How to verify.} Confirm the report contains no failed result at the configured threshold. Typical fixes include running as a non-root user, narrowing permissions, adding a health check, or removing credentials from build arguments.
+
+\stage{6}{License compliance}
+
+\textbf{Purpose.} The checker inventories every locked npm package and compares each SPDX expression with the checked-in allow/deny policy. Missing, denied, and unreviewed identifiers fail closed.
+
+\textbf{Pass rule.} Every dependency license is classified and approved. \evidence{licenses.json} and \texttt{license-check.txt}.
+
+\textbf{Local verification.}
+\begin{lstlisting}
+npm run security:licenses
+\end{lstlisting}
+GPL/LGPL occurrences used by media tooling are explicitly documented for legal follow-up. Approval in this technical policy is not a substitute for legal advice, especially when distributing the container.
+
+\stage{7}{Container scan}
+
+\textbf{Purpose.} Trivy scans the built image, including Debian packages and production npm packages, rather than assuming the source lockfile describes everything shipped.
+
+\textbf{Pass rule.} No fixable high or critical vulnerability is present. \evidence{container-scan.json}.
+
+\textbf{How to verify.} The scan must target \texttt{serveur-railway:<commit SHA>} and exit zero. Fix findings by updating the base image or the affected package, rebuild, and scan the new image.
+
+\stage{8}{SBOM generation}
+
+\textbf{Purpose.} Syft creates a CycloneDX JSON Software Bill of Materials from the saved candidate image. It records the components needed for incident response, vulnerability matching, and customer evidence.
+
+\textbf{Pass rule.} Syft exits zero and produces valid, non-empty JSON. \evidence{sbom.cdx.json}.
+
+\textbf{How to verify.} Open the file and confirm \texttt{bomFormat} is \texttt{CycloneDX}, \texttt{components} is populated, and the run's stage is green. Generation success means the inventory exists; it does not mean all components are vulnerability-free--stage 7 provides that decision.
+
+\stage{9}{SLSA provenance}
+
+\textbf{Purpose.} \texttt{actions/attest} binds the candidate image archive's SHA-256 digest to GitHub's workflow identity using an in-toto/SLSA provenance statement. This answers who built which bytes, from which workflow and commit.
+
+\textbf{Pass rule.} GitHub accepts and signs the attestation for the archive. The evidence appears under the repository's attestations and in the step output.
+
+\textbf{How to verify.} Download the image archive from a trusted release store if retained, then use GitHub CLI:
+\begin{lstlisting}
+gh attestation verify application-image.tar --repo OWNER/REPOSITORY
+\end{lstlisting}
+The verified subject digest must match the archive and the repository/workflow identity must be expected. GitHub documents this at \href{https://github.com/actions/attest}{actions/attest}.
+
+\stage{10}{Image signing}
+
+\textbf{Purpose.} Cosign uses GitHub's short-lived OIDC identity to sign the candidate container archive as a blob. No long-lived private signing key is stored in repository secrets. The workflow immediately verifies its own bundle.
+
+\textbf{Pass rule.} Both \texttt{cosign sign-blob} and \texttt{cosign verify-blob} exit zero. \evidence{image.sigstore.json}.
+
+\textbf{Independent verification.}
+\begin{lstlisting}
+cosign verify-blob --bundle image.sigstore.json \
+  --certificate-identity \
+  https://github.com/OWNER/REPO/.github/workflows/security.yml@refs/heads/main \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  application-image.tar
+\end{lstlisting}
+Verification must report success and the expected identity. A valid signature proves integrity and signer identity; stages 3, 4, 5, 7, 11, 12, and 13 determine security fitness.
+
+\stage{11}{Policy as code}
+
+\textbf{Purpose.} Repository rules are data in \texttt{.security/security-policy.json} and are evaluated automatically. Current requirements include mandatory security files, a non-root final container user, no \texttt{:latest} base image, a Docker health check, excluded secrets/runtime data, a \texttt{/health} route, and no default admin password.
+
+\textbf{Pass rule.} Every declared policy assertion evaluates true. \evidence{policy.json} and \texttt{policy-check.txt}.
+
+\textbf{Local verification.}
+\begin{lstlisting}
+npm run security:policy
+\end{lstlisting}
+Changes to policy should be reviewed like application code because they alter what can be deployed.
+
+\stage{12}{DAST -- OWASP ZAP}
+
+\textbf{Purpose.} CI starts the actual candidate image with WhatsApp networking disabled and safe test credentials, waits for \texttt{/health}, then OWASP ZAP crawls and passively scans the HTTP surface over an isolated Docker network.
+
+\textbf{Pass rule.} The application becomes healthy and ZAP has no blocking baseline failure. Informational and warning observations remain in the report for review. \evidence{zap.html} and \texttt{zap.json}.
+
+\textbf{How to verify.} Download and open \texttt{zap.html}. Confirm the target is \texttt{http://security-app:8080}, inspect every alert, and confirm the CI stage is green. The checked-in \texttt{zap-rules.tsv} promotes missing cache, anti-clickjacking, MIME-sniffing, HSTS, CSP, and server-disclosure controls to \texttt{FAIL}. The \texttt{-I} setting prevents other warning-only baseline observations from blocking; technical scan errors and promoted controls still block.
+
+\stage{13}{Integration tests}
+
+\textbf{Purpose.} Node starts the real Express module in a child process with temporary data and verifies behavior across component boundaries.
+
+The suite currently proves:
+\begin{itemize}
+  \item \texttt{/health} is public and returns a healthy response;
+  \item CSP, clickjacking, MIME-sniffing, and permissions headers are present;
+  \item unapproved \texttt{Host} headers are rejected;
+  \item protected APIs reject anonymous requests;
+  \item login rejects a missing CSRF token; and
+  \item form bodies over 10 KB are rejected.
+\end{itemize}
+
+\textbf{Pass rule.} All tests pass with zero failures. \evidence{integration-tests.txt}.
+
+\textbf{Local verification.}
+\begin{lstlisting}
+npm test
+\end{lstlisting}
+The expected result is \texttt{tests 6}, \texttt{pass 6}, \texttt{fail 0}.
+
+\section{Required one-time Railway and GitHub setup}
+
+\begin{enumerate}
+  \item In Railway, set real \texttt{WEB\_ADMIN\_USER}, \texttt{WEB\_ADMIN\_PASSWORD}, \texttt{TURNSTILE\_SITE\_KEY}, and \texttt{TURNSTILE\_SECRET\_KEY} variables. Do not commit them. If \texttt{auth.json} already exists on a persistent volume, plan credential rotation separately.
+  \item In the Railway service connected to \texttt{main}, enable \textbf{Wait for CI}. Without this dashboard switch, GitHub can report failure but Railway may already have started an automatic deployment.
+  \item Protect \texttt{main} in GitHub and require the status check \textbf{All 13 DevSecOps stages} before merge. Prevent administrators from bypassing it unless emergency policy explicitly permits that.
+  \item Ensure GitHub artifact attestations are available for the repository plan. Public repositories are supported broadly; private/internal availability can depend on the GitHub plan. A missing capability intentionally makes stage 9 fail closed.
+  \item Keep Docker/action versions maintained. Dependabot or an equivalent update process should propose reviewed upgrades; never blindly change a security scanner to an unreviewed mutable release.
+\end{enumerate}
+
+\section{Daily operator checklist}
+
+\begin{tabularx}{\textwidth}{p{8mm}X}
+\toprule
+$\square$ & The green workflow belongs to the exact commit being deployed.\\
+$\square$ & The summary says \texttt{SECURITY GATE PASSED}.\\
+$\square$ & All 13 release-stage outcomes say \texttt{success}.\\
+$\square$ & Railway \textbf{Wait for CI} is enabled and the deployment left \texttt{WAITING} only after success.\\
+$\square$ & Unexpected ZAP warnings and copyleft license entries were reviewed.\\
+$\square$ & The SBOM, scan JSON, signature bundle, and GitHub attestation are retained with the release evidence.\\
+\bottomrule
+\end{tabularx}
+
+\section{What a red gate means}
+
+A red gate is a deployment decision, not merely a report. Open the first failed numbered stage, use its detailed artifact to locate the cause, remediate it, and push a new commit. Do not rerun until green to hide intermittent failures. If a scanner service is unavailable, the pipeline fails closed; record and review any emergency override outside the pipeline.
+
+\section{Reference links}
+
+\begin{itemize}
+  \item Railway Wait for CI: \url{https://docs.railway.com/deployments/github-autodeploys}
+  \item GitHub artifact attestations action: \url{https://github.com/actions/attest}
+  \item Semgrep: \url{https://github.com/semgrep/semgrep}
+  \item OSV-Scanner: \url{https://github.com/google/osv-scanner}
+  \item Trivy: \url{https://github.com/aquasecurity/trivy}
+  \item Syft: \url{https://github.com/anchore/syft}
+  \item Cosign: \url{https://github.com/sigstore/cosign}
+  \item OWASP ZAP baseline scan: \url{https://www.zaproxy.org/docs/docker/baseline-scan/}
+  \item CycloneDX: \url{https://cyclonedx.org/}
+  \item SLSA: \url{https://slsa.dev/}
+\end{itemize}
+
+\end{document}

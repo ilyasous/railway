@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "deploymentBranch": "main",
+  "requiredFiles": [
+    ".github/workflows/security.yml",
+    ".security/semgrep/rules.yml",
+    ".security/zap-rules.tsv",
+    ".security/license-policy.json",
+    "Dockerfile",
+    ".dockerignore",
+    "test/security.integration.test.js"
+  ],
+  "container": {
+    "forbidLatestBaseImage": true,
+    "requiredRuntimeUser": "node",
+    "requireHealthcheck": true,
+    "forbiddenCopiedPaths": [".env", ".git", "node_modules", "auth.json", "auth_info_"]
+  },
+  "application": {
+    "requiredHealthPath": "/health",
+    "forbidDefaultAdminPassword": true
+  }
+}

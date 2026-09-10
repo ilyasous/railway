@@ -83,6 +83,9 @@ const {
 const PORT = process.env.PORT || 8080;
 const SERVER_ROLE = String(process.env.SERVER_ROLE || 'railway').trim().toLowerCase();
 const SERVER_NAME = String(process.env.SERVER_NAME || 'Serveur Railway').trim();
+const WHATSAPP_ENABLED = !['0', 'false', 'no', 'off'].includes(
+  String(process.env.WHATSAPP_ENABLED || 'true').trim().toLowerCase()
+);
 function resolveDataDir() {
   const configured = String(process.env.APP_DATA_DIR || process.env.DATA_DIR || process.env.RAILWAY_VOLUME_MOUNT_PATH || '').trim();
   if (!configured) return __dirname;
@@ -1083,6 +1086,10 @@ function startResourceMonitor() {
 async function bootHighAvailability() {
   startDeletedCacheCleanup();
   startResourceMonitor();
+  if (!WHATSAPP_ENABLED) {
+    console.log('[HA] WhatsApp connections disabled by WHATSAPP_ENABLED.');
+    return;
+  }
   startAllBots('startup');
 }
 
@@ -1661,7 +1668,7 @@ async function startBot(bot) {
                 await bot.sock.sendMessage(jid, { text: '⏳ Génération du QR Code en cours...' });
                 let qrData = null;
                 for (let i = 0; i < 15; i++) {
-                  await new Promise(r => setTimeout(r, 2000));
+                  await new Promise((resolve) => { setTimeout(resolve, 2000); });
                   const nb = bots.get(targetBotId);
                   if (nb && nb.latestQrDataUrl) { qrData = nb.latestQrDataUrl; break; }
                 }

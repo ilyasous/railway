@@ -1,0 +1,30 @@
+rules:
+  - id: javascript-eval
+    message: Dynamic eval enables arbitrary code execution.
+    severity: ERROR
+    languages: [javascript]
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: new Function(...)
+
+  - id: javascript-shell-exec
+    message: child_process.exec invokes a shell; use execFile or spawn with fixed arguments.
+    severity: ERROR
+    languages: [javascript]
+    pattern-either:
+      - pattern: $CP.exec(...)
+      - pattern: $CP.execSync(...)
+
+  - id: weak-password-hash
+    message: MD5 and SHA-1 are unsuitable for password hashing.
+    severity: ERROR
+    languages: [javascript]
+    pattern-either:
+      - pattern: crypto.createHash('md5')
+      - pattern: crypto.createHash('sha1')
+
+  - id: hardcoded-admin-password
+    message: Do not provide a known default administrator password.
+    severity: ERROR
+    languages: [javascript]
+    pattern-regex: "WEB_ADMIN_PASSWORD\\s*\\|\\|\\s*['\\\"]admin['\\\"]"

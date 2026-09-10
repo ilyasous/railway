@@ -1,6 +1,19 @@
 {
+  "name": "serveur-railway",
+  "version": "1.0.0",
+  "private": true,
+  "engines": {
+    "node": ">=24.0.0"
+  },
   "scripts": {
-    "start": "node start.js"
+    "start": "node start.js",
+    "start:container": "node index.js",
+    "lint": "eslint .",
+    "syntax": "node scripts/check-syntax.js",
+    "check": "npm run syntax && npm run lint",
+    "test": "node --test --test-reporter=spec test/security.integration.test.js",
+    "security:licenses": "node scripts/check-licenses.js",
+    "security:policy": "node scripts/check-policy.js"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^7.0.0-rc10",
@@ -10,5 +23,8 @@
     "pino": "^10.3.1",
     "qrcode": "^1.5.4",
     "youtube-dl-exec": "^3.1.6"
+  },
+  "devDependencies": {
+    "eslint": "10.10.0"
   }
 }

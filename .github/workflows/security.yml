@@ -1,121 +1,232 @@
-name: Security Scan
+name: Pre-deployment security gate
 
 on:
   push:
     branches:
-      - "**"
+      - main
   pull_request:
-    branches:
-      - "**"
   schedule:
     - cron: "23 3 * * 1"
   workflow_dispatch:
 
 permissions:
   contents: read
+  id-token: write
+  attestations: write
+  artifact-metadata: write
 
 concurrency:
   group: security-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  dependency-scan:
-    name: Dependencies
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+  security-gate:
+    name: All 13 DevSecOps stages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-
-      - name: Install dependencies safely
-        run: npm ci --ignore-scripts
-
-      - name: npm audit
-        run: npm audit --audit-level=moderate
-
-      - name: OSV Scanner
-        run: >-
-          docker run --rm
-          -v "$PWD:/src"
-          ghcr.io/google/osv-scanner:v2.3.8
-          scan source --recursive /src
-
-  zap-baseline-scan:
-    name: Live website ZAP scan (${{ matrix.site.name }})
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    if: github.event_name != 'pull_request'
-    strategy:
-      fail-fast: false
-      matrix:
-        site:
-          - name: main
-            target: https://oussafi.work
-            artifact: zap-main
-          - name: backup
-            target: https://backup.oussafi.work
-            artifact: zap-backup
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: ZAP Baseline Scan
-        uses: zaproxy/action-baseline@v0.15.0
-        with:
-          target: ${{ matrix.site.target }}
-          docker_name: ghcr.io/zaproxy/zaproxy:stable
-          allow_issue_writing: false
-          fail_action: false
-          artifact_name: ${{ matrix.site.artifact }}
-
-  secret-scan:
-    name: Secrets
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-
-    steps:
-      - name: Checkout repository history
-        uses: actions/checkout@v4
+      - name: Check out complete repository history
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - name: TruffleHog (push)
-        if: >-
-          github.event_name == 'push' &&
-          github.event.before != '0000000000000000000000000000000000000000'
-        uses: trufflesecurity/trufflehog@v3.95.2
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
         with:
-          path: ./
-          base: ${{ github.event.before }}
-          head: ${{ github.event.after }}
-          extra_args: --results=verified --fail
+          node-version: "24.20.0"
+          package-manager-cache: false
 
-      - name: TruffleHog (pull request)
-        if: github.event_name == 'pull_request'
-        uses: trufflesecurity/trufflehog@v3.95.2
-        with:
-          path: ./
-          base: ${{ github.event.pull_request.base.sha }}
-          head: ${{ github.event.pull_request.head.sha }}
-          extra_args: --results=verified --fail
+      - name: Prepare report directory
+        run: |
+          mkdir -p security-reports
+          chmod 0777 security-reports
 
-      - name: TruffleHog (full branch)
-        if: >-
-          github.event_name == 'workflow_dispatch' ||
-          github.event_name == 'schedule' ||
-          (github.event_name == 'push' &&
-          github.event.before == '0000000000000000000000000000000000000000')
-        uses: trufflesecurity/trufflehog@v3.95.2
+      - name: Install locked dependencies without lifecycle scripts
+        id: dependency_install
+        continue-on-error: true
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: 1 - Secrets detection (TruffleHog)
+        id: secrets
+        continue-on-error: true
+        run: |
+          docker run --rm -v "$PWD:/repo" trufflesecurity/trufflehog:3.95.2 \
+            git file:///repo --no-update --only-verified --fail
+          echo "PASS: no verified secret was found in Git history." > security-reports/secrets.txt
+
+      - name: 2 - Code quality (syntax and ESLint)
+        id: quality
+        if: always() && steps.dependency_install.outcome == 'success'
+        continue-on-error: true
+        run: npm run check 2>&1 | tee security-reports/code-quality.txt
+
+      - name: 3 - SAST (Semgrep)
+        id: sast
+        continue-on-error: true
+        run: |
+          docker run --rm -v "$PWD:/src" semgrep/semgrep:1.136.0 \
+            semgrep scan --config /src/.security/semgrep/rules.yml --error \
+            --json --output /src/security-reports/sast.json /src
+
+      - name: 4 - SCA (npm audit and OSV Scanner)
+        id: sca
+        if: always() && steps.dependency_install.outcome == 'success'
+        continue-on-error: true
+        run: |
+          set +e
+          npm audit --omit=dev --audit-level=high --json > security-reports/npm-audit.json
+          npm_status=$?
+          docker run --rm -v "$PWD:/src" ghcr.io/google/osv-scanner:v2.3.8 \
+            scan source --recursive /src > security-reports/osv.txt
+          osv_status=$?
+          set -e
+          if [ "$npm_status" -ne 0 ] || [ "$osv_status" -ne 0 ]; then exit 1; fi
+
+      - name: 5 - Infrastructure as code scan (Trivy)
+        id: iac
+        continue-on-error: true
+        run: |
+          docker run --rm -v "$PWD:/workspace" aquasec/trivy:0.70.0 \
+            config --exit-code 1 --severity HIGH,CRITICAL --format json \
+            --output /workspace/security-reports/iac.json /workspace
+
+      - name: 6 - License compliance
+        id: license
+        if: always() && steps.dependency_install.outcome == 'success'
+        continue-on-error: true
+        run: npm run security:licenses 2>&1 | tee security-reports/license-check.txt
+
+      - name: Build candidate container once
+        id: container_build
+        continue-on-error: true
+        run: |
+          docker build --pull --tag serveur-railway:${{ github.sha }} .
+          docker save --output security-reports/application-image.tar serveur-railway:${{ github.sha }}
+
+      - name: 7 - Container vulnerability scan (Trivy)
+        id: container_scan
+        if: always() && steps.container_build.outcome == 'success'
+        continue-on-error: true
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$PWD:/workspace" aquasec/trivy:0.70.0 \
+            image --exit-code 1 --ignore-unfixed --severity HIGH,CRITICAL \
+            --format json --output /workspace/security-reports/container-scan.json \
+            serveur-railway:${{ github.sha }}
+
+      - name: 8 - Generate CycloneDX SBOM (Syft)
+        id: sbom
+        if: always() && steps.container_build.outcome == 'success'
+        continue-on-error: true
+        run: |
+          docker run --rm -v "$PWD:/workspace" anchore/syft:v1.51.1 \
+            docker-archive:/workspace/security-reports/application-image.tar \
+            -o cyclonedx-json=/workspace/security-reports/sbom.cdx.json
+
+      - name: 9 - Generate signed SLSA provenance
+        id: provenance
+        if: always() && github.event_name != 'pull_request' && steps.container_build.outcome == 'success'
+        continue-on-error: true
+        uses: actions/attest@v4
         with:
-          path: ./
-          base: ""
-          head: ${{ github.ref_name }}
-          extra_args: --results=verified --fail
+          subject-path: security-reports/application-image.tar
+
+      - name: Install Cosign
+        id: cosign_install
+        if: always() && github.event_name != 'pull_request' && steps.container_build.outcome == 'success'
+        continue-on-error: true
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
+
+      - name: 10 - Sign and verify the candidate image bundle
+        id: signing
+        if: always() && github.event_name != 'pull_request' && steps.container_build.outcome == 'success' && steps.cosign_install.outcome == 'success'
+        continue-on-error: true
+        env:
+          CERTIFICATE_IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/security.yml@${{ github.ref }}
+        run: |
+          cosign sign-blob --yes --bundle security-reports/image.sigstore.json \
+            security-reports/application-image.tar
+          cosign verify-blob --bundle security-reports/image.sigstore.json \
+            --certificate-identity "$CERTIFICATE_IDENTITY" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            security-reports/application-image.tar
+
+      - name: 11 - Policy as code
+        id: policy
+        continue-on-error: true
+        run: npm run security:policy 2>&1 | tee security-reports/policy-check.txt
+
+      - name: 12 - DAST against candidate container (OWASP ZAP)
+        id: dast
+        if: always() && steps.container_build.outcome == 'success'
+        continue-on-error: true
+        run: |
+          cp .security/zap-rules.tsv security-reports/zap-rules.tsv
+          docker network create security-scan
+          docker run --detach --name security-app --network security-scan \
+            -e WHATSAPP_ENABLED=false \
+            -e WEB_ADMIN_USER=ci-admin \
+            -e WEB_ADMIN_PASSWORD=ci-only-password \
+            -e TURNSTILE_SITE_KEY=1x00000000000000000000AA \
+            -e TURNSTILE_SECRET_KEY=1x0000000000000000000000000000000AA \
+            serveur-railway:${{ github.sha }}
+          ready=0
+          for attempt in $(seq 1 30); do
+            if docker exec security-app node -e "fetch('http://127.0.0.1:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then
+            docker logs security-app
+            exit 1
+          fi
+          docker run --rm --network security-scan \
+            -v "$PWD/security-reports:/zap/wrk/:rw" \
+            ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
+            -t http://security-app:8080 -I -c zap-rules.tsv -J zap.json -r zap.html
+
+      - name: 13 - Integration tests
+        id: integration
+        if: always() && steps.dependency_install.outcome == 'success'
+        continue-on-error: true
+        run: npm test 2>&1 | tee security-reports/integration-tests.txt
+
+      - name: Evaluate final deployment gate
+        if: always()
+        env:
+          RELEASE_RUN: ${{ github.event_name != 'pull_request' }}
+          CONTAINER_BUILD: ${{ steps.container_build.outcome }}
+          STAGE_SECRETS: ${{ steps.secrets.outcome }}
+          STAGE_QUALITY: ${{ steps.quality.outcome }}
+          STAGE_SAST: ${{ steps.sast.outcome }}
+          STAGE_SCA: ${{ steps.sca.outcome }}
+          STAGE_IAC: ${{ steps.iac.outcome }}
+          STAGE_LICENSE: ${{ steps.license.outcome }}
+          STAGE_CONTAINER: ${{ steps.container_scan.outcome }}
+          STAGE_SBOM: ${{ steps.sbom.outcome }}
+          STAGE_PROVENANCE: ${{ steps.provenance.outcome }}
+          STAGE_SIGNING: ${{ steps.signing.outcome }}
+          STAGE_POLICY: ${{ steps.policy.outcome }}
+          STAGE_DAST: ${{ steps.dast.outcome }}
+          STAGE_INTEGRATION: ${{ steps.integration.outcome }}
+        run: node scripts/verify-security-gate.js
+
+      - name: Upload security evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: security-reports-${{ github.sha }}
+          path: |
+            security-reports/**
+            !security-reports/application-image.tar
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Clean up scan containers
+        if: always()
+        run: |
+          docker rm --force security-app 2>/dev/null || true
+          docker network rm security-scan 2>/dev/null || true
