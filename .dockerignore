@@ -3,6 +3,7 @@
 .env
 node_modules
 security-reports
+security-reports-*.zip
 docs
 logs
 auth.json

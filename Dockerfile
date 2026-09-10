@@ -16,7 +16,9 @@ FROM base AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
 
-RUN mkdir -p /app/logs \
+RUN rm -rf /usr/local/lib/node_modules/npm \
+    && rm -f /usr/local/bin/npm /usr/local/bin/npx \
+    && mkdir -p /app/logs \
     && chown node:node /app /app/logs
 
 COPY --from=dependencies --chown=node:node /app/node_modules ./node_modules

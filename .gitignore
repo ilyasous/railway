@@ -2,6 +2,7 @@
 node_modules/
 logs/
 security-reports/
+security-reports-*.zip
 auth_info_*/
 bots.json
 deleted_cache/
