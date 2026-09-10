@@ -101,7 +101,8 @@ jobs:
         id: container_build
         continue-on-error: true
         run: |
-          docker build --pull --tag serveur-railway:${{ github.sha }} .
+          docker build --pull --progress=plain --tag serveur-railway:${{ github.sha }} . \
+            2>&1 | tee security-reports/container-build.txt
           docker save --output security-reports/application-image.tar serveur-railway:${{ github.sha }}
 
       - name: 7 - Container vulnerability scan (Trivy)

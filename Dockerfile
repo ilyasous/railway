@@ -1,18 +1,23 @@
-FROM node:24.20.0-bookworm-slim AS dependencies
+FROM node:24.20.0-bookworm-slim AS base
+
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends ca-certificates python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+FROM base AS dependencies
 
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --no-audit --no-fund \
     && npm cache clean --force
 
-FROM node:24.20.0-bookworm-slim AS runtime
+FROM base AS runtime
 
 ENV NODE_ENV=production
 WORKDIR /app
 
-RUN mkdir -p /data && chown node:node /data
-ENV APP_DATA_DIR=/data
-ENV LOG_FILE=/data/server.log
+RUN mkdir -p /app/logs \
+    && chown node:node /app /app/logs
 
 COPY --from=dependencies --chown=node:node /app/node_modules ./node_modules
 COPY --chown=node:node package.json index.js web.js ai.js downloader.js ./
