@@ -26,12 +26,15 @@ async function waitForServer(url, timeoutMs = 15000) {
 
 before(async () => {
   dataDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'serveur-railway-test-'));
+  const logFile = path.join(dataDirectory, 'server.log');
+  fs.writeFileSync(logFile, '2026-09-10T00:00:00.000Z [test] [LOG] console-test-line\n', 'utf8');
   const requestedPort = 19000 + Math.floor(Math.random() * 1000);
   baseUrl = 'http://127.0.0.1:' + requestedPort;
   const childEnvironment = {
     ...process.env,
     PORT: String(requestedPort),
     APP_DATA_DIR: dataDirectory,
+    LOG_FILE: logFile,
     ALLOWED_HOSTS: '127.0.0.1',
     WEB_ADMIN_USER: 'ci-admin',
     WEB_ADMIN_PASSWORD: 'integration-only-password'
@@ -116,6 +119,40 @@ test('login is available with only the two web credential variables', async () =
     })
   });
   assert.equal(response.status, 401);
+});
+
+test('authenticated administrator can read the application console', async () => {
+  const loginPage = await (await fetch(baseUrl + '/login')).text();
+  const csrfToken = loginPage.match(/name="_csrf" value="([^"]+)"/)?.[1];
+  assert.ok(csrfToken);
+
+  const loginResponse = await fetch(baseUrl + '/login', {
+    method: 'POST',
+    redirect: 'manual',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      name: 'ci-admin',
+      password: 'integration-only-password',
+      _csrf: csrfToken
+    })
+  });
+  assert.equal(loginResponse.status, 302);
+  const sessionCookie = loginResponse.headers.get('set-cookie')?.split(';')[0];
+  assert.ok(sessionCookie);
+
+  const consolePageResponse = await fetch(baseUrl + '/logs', {
+    headers: { cookie: sessionCookie }
+  });
+  assert.equal(consolePageResponse.status, 200);
+  assert.match(await consolePageResponse.text(), /id="live-console-output"/);
+
+  const response = await fetch(baseUrl + '/api/logs?lines=200', {
+    headers: { cookie: sessionCookie }
+  });
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.exists, true);
+  assert.match(body.text, /console-test-line/);
 });
 
 test('oversized form bodies are rejected', async () => {

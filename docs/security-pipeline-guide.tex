@@ -236,7 +236,8 @@ The suite currently proves:
   \item unapproved \texttt{Host} headers are rejected;
   \item protected APIs reject anonymous requests;
   \item login rejects a missing CSRF token;
-  \item login remains available when only the two web credential variables are configured; and
+  \item login remains available when only the two web credential variables are configured;
+  \item the runtime log API is available only to an authenticated administrator; and
   \item form bodies over 10 KB are rejected.
 \end{itemize}
 
@@ -246,7 +247,7 @@ The suite currently proves:
 \begin{lstlisting}
 npm test
 \end{lstlisting}
-The expected result is \texttt{tests 7}, \texttt{pass 7}, \texttt{fail 0}.
+The expected result is \texttt{tests 8}, \texttt{pass 8}, \texttt{fail 0}.
 
 \section{Required one-time Railway and GitHub setup}
 

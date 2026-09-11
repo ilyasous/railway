@@ -14,12 +14,13 @@ RUN npm ci --omit=dev --no-audit --no-fund \
 FROM base AS runtime
 
 ENV NODE_ENV=production
+ENV DATA_DIR=/data
 WORKDIR /app
 
 RUN rm -rf /usr/local/lib/node_modules/npm \
     && rm -f /usr/local/bin/npm /usr/local/bin/npx \
-    && mkdir -p /app/logs \
-    && chown node:node /app /app/logs
+    && mkdir -p /app/logs /data \
+    && chown -R node:node /app /app/logs /data
 
 COPY --from=dependencies --chown=node:node /app/node_modules ./node_modules
 COPY --chown=node:node package.json index.js web.js ai.js downloader.js ./

@@ -1,0 +1,699 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=18mm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{microtype}
+\usepackage{amssymb}
+
+\definecolor{navy}{HTML}{10233F}
+\definecolor{purple}{HTML}{6941C6}
+\definecolor{green}{HTML}{167D4A}
+\definecolor{amber}{HTML}{A15C00}
+\definecolor{red}{HTML}{B42318}
+\definecolor{light}{HTML}{F2F6FA}
+\definecolor{line}{HTML}{D8E2EC}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=purple,
+  urlcolor=purple,
+  pdftitle={Salibot Complete Plain-Language Guide},
+  pdfauthor={Serveur Railway project}
+}
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{Salibot}
+\rhead{Complete plain-language guide}
+\cfoot{\thepage}
+\setlength{\headheight}{14pt}
+\setlength{\emergencystretch}{2em}
+\setlist[itemize]{leftmargin=5mm,itemsep=2pt,topsep=3pt}
+\setlist[enumerate]{leftmargin=6mm,itemsep=3pt,topsep=3pt}
+\lstset{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{light},
+  frame=single,
+  rulecolor=\color{line},
+  breaklines=true,
+  columns=fullflexible,
+  showstringspaces=false,
+  xleftmargin=2mm,
+  xrightmargin=2mm,
+  aboveskip=4pt,
+  belowskip=5pt
+}
+\newcommand{\plain}[1]{\textcolor{purple}{\textbf{In simple terms:}} #1}
+\newcommand{\warning}[1]{\textcolor{red}{\textbf{Important:}} #1}
+\newcommand{\optional}{\textcolor{amber}{Optional}}
+\newcommand{\required}{\textcolor{green}{Required}}
+
+\begin{document}
+\hypersetup{pageanchor=false}
+
+\begin{titlepage}
+\pagecolor{navy}
+\color{white}
+\vspace*{22mm}
+{\Huge\bfseries Salibot\par}
+\vspace{4mm}
+{\LARGE Complete Application Guide\par}
+\vspace{7mm}
+{\Large How the website, WhatsApp bots, Railway hosting, data, security, and deployment work\par}
+\vspace{8mm}
+{\large Written in plain language for operators and non-technical readers\par}
+\vfill
+\begin{tabular}{ll}
+Application type: & Multi-bot WhatsApp control server\\
+Hosting target: & Railway\\
+Main website language: & French\\
+Guide date: & 10 September 2026\\
+\end{tabular}
+\vspace{18mm}
+\end{titlepage}
+\hypersetup{pageanchor=true}
+\pagenumbering{roman}
+\nopagecolor
+\color{black}
+
+\tableofcontents
+\newpage
+\pagenumbering{arabic}
+
+\section{The application in one minute}
+
+Salibot is one application with two faces:
+
+\begin{itemize}
+  \item a private administration website where an operator creates, connects, configures, and watches WhatsApp bot instances; and
+  \item a background WhatsApp worker that listens for events and commands, sends alerts, recovers certain deleted messages, forwards statuses, and downloads supported social videos.
+\end{itemize}
+
+Railway supplies the internet-facing server. GitHub stores the source code and runs the pre-deployment security checks. Cloudflare Turnstile can add a human-verification challenge to the login page. The application uses the Baileys library to behave like a linked WhatsApp device.
+
+\plain{A person opens the website, signs in, creates a bot, links a WhatsApp account, chooses which groups matter, and turns features on or off. Salibot then keeps running on Railway and performs those choices automatically.}
+
+\warning{This is not the official WhatsApp Business Cloud API. It uses a linked-device session. WhatsApp can disconnect a session, change behavior, or require the account to be linked again. The operator is responsible for lawful use, consent, privacy, and compliance with WhatsApp's terms.}
+
+\subsection{What the application does not do}
+
+The current application does not provide an unrestricted command-line shell inside the website. The page called \textbf{Console serveur} is a read-only view of application logs. It cannot run Linux commands. Railway build logs and Railway platform events stay in Railway's own dashboard.
+
+\section{The big picture}
+
+\subsection{Main parts}
+
+\begin{tabularx}{\textwidth}{p{0.23\textwidth}X}
+\toprule
+\textbf{Part} & \textbf{Plain-language purpose}\\
+\midrule
+Railway service & Keeps the application online, provides a public address, restarts it after failures, and can attach persistent storage.\\
+Web administration site & The private control panel used to sign in, manage bots, change features, view resources, and read logs.\\
+WhatsApp bot engine & Opens one linked WhatsApp connection for every configured bot and reacts to WhatsApp events.\\
+Data folder & Stores the bot list, settings, website password record, WhatsApp linked-device credentials, cached media, and logs.\\
+External services & WhatsApp, Cloudflare Turnstile, AI providers, social-media sites, optional Cobalt, and the Cloudflare speed-test endpoint.\\
+GitHub security pipeline & Runs thirteen checks before a release is allowed to deploy.\\
+\bottomrule
+\end{tabularx}
+
+\subsection{A normal request from start to finish}
+
+\begin{center}
+\fcolorbox{line}{light}{\begin{minipage}{0.92\textwidth}
+\textbf{Website flow}\par
+Browser $\longrightarrow$ Railway public address $\longrightarrow$ Salibot login $\longrightarrow$ protected dashboard $\longrightarrow$ saved settings or bot action
+
+\vspace{3mm}
+\textbf{WhatsApp flow}\par
+WhatsApp event $\longrightarrow$ linked bot receives it $\longrightarrow$ Salibot checks the bot's rules $\longrightarrow$ Salibot ignores it or sends the chosen alert/action
+
+\vspace{3mm}
+\textbf{Deployment flow}\par
+Code pushed to GitHub $\longrightarrow$ thirteen security stages $\longrightarrow$ final gate passes $\longrightarrow$ Railway deploys the same revision
+\end{minipage}}
+\end{center}
+
+\subsection{What happens when the server starts}
+
+\begin{enumerate}
+  \item Node.js starts \texttt{index.js} in the production container.
+  \item Console messages begin going to both Railway's log stream and \texttt{logs/server.log}.
+  \item The application chooses its data directory. If Railway attached a volume, the Railway mount path is used automatically; otherwise files live beside the application.
+  \item It loads \texttt{bots.json}. If that file does not exist, it creates one bot named \texttt{bot1}.
+  \item It starts the protected web administration site.
+  \item It schedules cleanup of old recovered-media cache files and starts RAM/disk monitoring.
+  \item Unless WhatsApp was explicitly disabled, it starts every configured bot.
+  \item Each bot loads its saved linked-device credentials and attempts to connect to WhatsApp.
+\end{enumerate}
+
+\section{Website tour}
+
+\subsection{Login page}
+
+The login page asks for the administrator name and password. On the first start, these come from \texttt{WEB\_ADMIN\_USER} and \texttt{WEB\_ADMIN\_PASSWORD}. The password is converted into a one-way password record before being saved; the original password is not stored in \texttt{auth.json}.
+
+When both \texttt{TURNSTILE\_SITE\_KEY} and \texttt{TURNSTILE\_SECRET\_KEY} exist, the Cloudflare Turnstile widget appears and the server verifies its token before checking the password. If either Turnstile value is absent, the current code disables Turnstile completely. For the intended protected production setup, configure both.
+
+After a successful login, the browser receives a private session cookie. The session lasts twelve hours from the most recent activity. Sessions are held in memory, so a server restart signs everyone out.
+
+\subsection{Main dashboard: Serveur Multi-Bots}
+
+The main dashboard gives the operator a single view of the whole Railway instance:
+
+\begin{itemize}
+  \item whether WhatsApp processing is active;
+  \item every bot name and whether it is connected;
+  \item buttons to create and manage bots;
+  \item host and container RAM estimates;
+  \item host and application-disk estimates;
+  \item application uptime;
+  \item a download-speed and latency test; and
+  \item a button to restart the whole application.
+\end{itemize}
+
+The RAM and disk figures are operational estimates. The container calculation assumes 512 MB of RAM and 1 GB of application disk. If the Railway plan uses different limits, the percentages are not billing figures and may not match the Railway dashboard exactly.
+
+The speed test downloads up to about 10 MB from Cloudflare's speed endpoint. It consumes network bandwidth and normally takes several seconds.
+
+The restart button exits the application process. Railway sees that exit and starts a replacement according to \texttt{railway.json}. During the restart, website sessions are lost and WhatsApp bots reconnect.
+
+\subsection{Creating a bot}
+
+Enter a bot name such as \texttt{bot\_support} and select \textbf{Créer un bot}. Bot names are cleaned so only letters, numbers, hyphens, and underscores are used in file paths. The bot is added to \texttt{bots.json} and starts automatically when WhatsApp processing is active.
+
+Each bot is independent. It has its own WhatsApp linked-device folder, allowed groups, tracked groups, feature choices, connection state, and temporary message memory.
+
+\subsection{Connecting a bot to WhatsApp}
+
+There are two methods:
+
+\begin{enumerate}
+  \item \textbf{QR code.} Open the bot, select \textbf{Connecter par QR Code}, then scan it from WhatsApp under Linked devices / Link a device. If the QR is not ready, wait a few seconds and refresh.
+  \item \textbf{Phone number.} Select \textbf{Connecter par Numéro}, enter the full number with country code and digits only, request a linking code, then enter that code in WhatsApp's linked-device flow.
+\end{enumerate}
+
+When connection succeeds, the website changes to \textbf{Connecté}, the QR and pairing code are cleared, the group list is refreshed, and queued server alerts are sent. A temporary network disconnect triggers an automatic reconnect. If WhatsApp reports that the account was logged out, Salibot clears that bot's saved session and a new link is required.
+
+\subsection{Disconnecting and deleting}
+
+\textbf{Disconnect} logs the WhatsApp device out but keeps the bot entry and its feature/group settings. The bot can be linked again later.
+
+\textbf{Delete bot} is more permanent. It removes the bot from the bot list, logs it out, deletes the linked-device credential folder, and deletes its allowed/tracked-group settings file. Use it only when the bot is no longer needed.
+
+\subsection{Allowed groups and tracked groups}
+
+These two lists have different jobs:
+
+\begin{longtable}{p{0.22\textwidth}p{0.70\textwidth}}
+\toprule
+\textbf{List} & \textbf{Meaning}\\
+\midrule
+Allowed groups & Normally the destinations that receive alerts, forwarded statuses, recovered-message reports, and videos sent by the \texttt{.u} command.\\
+Tracked groups & The source groups Salibot watches for deleted messages, member changes, administrator changes, and group-setting changes.\\
+\bottomrule
+\end{longtable}
+
+\plain{A tracked group is where Salibot watches. An allowed group is where Salibot sends. A group may be in both lists, one list, or neither.}
+
+The group selection pages can only list groups while the bot is connected and is already a member of those groups.
+
+\subsection{Per-bot permissions}
+
+The setting \textbf{Who can use commands?} has three choices:
+
+\begin{itemize}
+  \item \textbf{Everyone}: any participant may use ordinary commands where the location rule allows them.
+  \item \textbf{Group administrators}: the linked account and administrators in group chats may use ordinary commands.
+  \item \textbf{Owner only}: only messages sent by the linked account itself may use commands.
+\end{itemize}
+
+The setting \textbf{Where can commands be used?} has four choices: everywhere, private chats only, allowed groups only, or private chats plus allowed groups.
+
+The setting \textbf{Where should alerts go?} chooses either the allowed groups or a private message to the linked account owner.
+
+Regardless of the general choice, \texttt{.bots} and \texttt{.reboot} are always owner-only. The social download command \texttt{.u} is also owner-only.
+
+\subsection{Feature switches}
+
+New bots start with all feature switches enabled. Each switch changes only the selected bot.
+
+\begin{longtable}{p{0.35\textwidth}p{0.59\textwidth}}
+\toprule
+\textbf{Feature shown on the website} & \textbf{What it does}\\
+\midrule
+\endhead
+Download Reels with \texttt{.u} & Allows the owner to download a supported social-media video and send it to all allowed groups.\\
+Anti-delete: private messages & Remembers incoming private messages so a deletion can produce a report and, when possible, a recovered copy.\\
+Anti-delete: tracked groups & Does the same for messages inside groups selected as tracked.\\
+Forward new statuses & Forwards new WhatsApp status text, images, or videos to the chosen alert destinations.\\
+Group member notifications & Reports joins/additions and leaves/removals in tracked groups.\\
+Administrator notifications & Reports promotions and demotions in tracked groups.\\
+Group-setting notifications & Reports tracked-group name, picture, description, editing-rule, and messaging-rule changes.\\
+Contact-photo notifications & Reports when a contact appears to change a profile picture; the bot's own picture is excluded.\\
+Capture View Once: private & Attempts to preserve and forward incoming view-once private content.\\
+Capture View Once: groups & Attempts to preserve and forward incoming view-once group content. This switch is not limited to the tracked-group list in the current code.\\
+\bottomrule
+\end{longtable}
+
+Select \textbf{Save settings} after changing switches or permission menus.
+
+\subsection{Console serveur: the log viewer}
+
+The sidebar item \textbf{Logs serveur} opens \texttt{/logs}. It shows the recent end of \texttt{logs/server.log}, refreshes every two seconds, scrolls with new output when the operator is already near the bottom, and has a pause/resume control. The operator may display 200, 500, 1,000, or 2,000 lines. Each read is limited to the newest 512 KB so the page does not load an unlimited file.
+
+The log page and its \texttt{/api/logs} feed require an authenticated administrator session. Dynamic content is placed on the page as text, not executable HTML. Successful health checks and successful log polling are not logged, which prevents the viewer from filling its own output.
+
+The file contains application runtime output such as connection changes, commands, errors, downloads, and web requests. It does not include Docker build output or every Railway platform event. It is not an interactive terminal and cannot execute commands.
+
+\section{What happens inside WhatsApp}
+
+\subsection{How Salibot listens}
+
+For every configured bot, Salibot creates a Baileys socket using that bot's saved linked-device credentials. It subscribes to connection changes, credential updates, message changes, new messages, group participant updates, and contact updates.
+
+Salibot ignores many events unless their matching feature is enabled. It also checks whether a message is private or in a group, whether the group is tracked or allowed, who sent the command, and where alerts should go.
+
+\subsection{Anti-delete behavior}
+
+For an incoming private message, Salibot remembers the message in memory when private anti-delete is enabled. For a group message, it remembers the message only when the group is tracked. Supported media is also downloaded into the deleted-media cache when possible.
+
+If WhatsApp later reports a delete/revoke event, Salibot looks up the original message. It sends a report containing the sender, chat or group, time, media type, and text, followed by the recovered media or forwarded message when possible. After processing the deletion, the in-memory entry is removed.
+
+Media types include images, normal videos, video notes, audio or voice notes, stickers, and documents. Old files in the deleted-media cache are removed after seven days by default. Cleanup starts shortly after boot and then runs every six hours by default.
+
+\warning{Recovery is best effort, not a guarantee. Salibot must have been online and must have received the original message before deletion. WhatsApp encryption or linked-device behavior may prevent access, especially for View Once content. Text/message memory is lost on restart even when media files remain on disk.}
+
+\subsection{Group and contact notifications}
+
+Tracked-group participant events can report additions, removals, promotions, and demotions. Tracked-group system messages can report changes to the group name, picture, description, editing permissions, or message permissions. Contact update events can report profile-picture changes.
+
+These reports go to the configured alert destination. If the destination is \textbf{allowed groups} but no allowed group exists, some alert types have nowhere to go. System resource alerts have an extra fallback to the linked account owner.
+
+\subsection{Status and View Once forwarding}
+
+When status forwarding is enabled, incoming status text is included in a report. Images and videos are downloaded and sent when available. View Once forwarding attempts to extract the original content and send it with a sender/group notice. When WhatsApp blocks the content, Salibot sends a notice explaining that the media was unavailable.
+
+\warning{These features can copy content that another person expected to disappear or remain limited. Use them only where everyone involved has been informed and where local law permits it. Protect destinations, backups, and logs from unauthorized access.}
+
+\subsection{Resource alerts}
+
+About twenty seconds after startup, and every five minutes afterward, Salibot checks its estimated container RAM and disk use. The default warning level is 85\%. Repeated high alerts are limited by a thirty-minute cooldown. When usage returns below the threshold, Salibot sends a recovery message.
+
+If no bot is connected, an alert can be queued for up to one hour. The queue holds at most fifty entries and tries again after a bot reconnects. Duplicate alerts with the same first line are updated rather than endlessly added.
+
+\section{WhatsApp command reference}
+
+Commands begin with a period by default. For example, the user sends \texttt{.ping}. The advanced \texttt{COMMAND\_PREFIX} setting can change the prefix.
+
+\begin{longtable}{p{0.20\textwidth}p{0.23\textwidth}p{0.49\textwidth}}
+\toprule
+\textbf{Command} & \textbf{Who} & \textbf{Result}\\
+\midrule
+\endhead
+\texttt{.ping} & According to permissions & Replies \texttt{pong} to prove the bot is responding.\\
+\texttt{.stats} & According to permissions & Shows estimated container RAM and application-disk use.\\
+\texttt{.servers} & According to permissions & Shows this standalone Railway server, its WhatsApp mode, uptime, and connected-bot count.\\
+\texttt{.uptime} & According to permissions & Shows how long the current application process has been running.\\
+\texttt{.test} & According to permissions & Runs the server download-speed and latency test and replies with the result.\\
+\texttt{.ask question} & According to permissions; AI must be configured & Sends one question to the selected AI provider and returns its answer.\\
+\texttt{.u URL} & Owner only & Downloads supported social video links and sends successful results to every allowed group.\\
+\texttt{.bots} & Owner only & Starts an interactive menu to list, create, delete, connect, or disconnect bots.\\
+\texttt{.reboot} & Owner only & Exits the server process so Railway can restart it.\\
+\texttt{.help} & According to permissions & Displays command explanations.\\
+\texttt{.menu} & According to permissions & Displays the short command menu.\\
+\texttt{.exit} & Flow owner & Cancels an interactive bot-management flow. During a flow, \texttt{exit}, \texttt{quitter}, \texttt{annuler}, or \texttt{retour} also cancels.\\
+\bottomrule
+\end{longtable}
+
+The bot-management conversation remembers who started it. In a group, another participant cannot take over the original person's menu flow.
+
+\section{Social-video downloading}
+
+The \texttt{.u} command recognizes Instagram, TikTok, Facebook, YouTube, and X/Twitter URLs. It removes common tracking parameters and duplicate links before processing.
+
+The normal download engine is \texttt{yt-dlp}, supplied by \texttt{youtube-dl-exec}. It prefers video up to 720p and MP4-compatible formats so the result is more suitable for WhatsApp. A download normally times out after ninety seconds and is limited to roughly 80 MB. Temporary files are deleted after sending.
+
+An operator may optionally configure one or more Cobalt endpoints. When configured, Cobalt is tried first except for Instagram stories; \texttt{yt-dlp} remains the fallback. Remote results can be downloaded to a temporary local file before they are sent, which helps validate size and avoid expired URLs.
+
+Private, deleted, expired, age-restricted, geo-blocked, or login-protected media may fail. Instagram stories commonly need cookies. A proxy or custom cookie source is an advanced operator option and must be protected like a password.
+
+\section{AI assistant}
+
+The \texttt{.ask} command is disabled until an AI key is configured. The default provider is Google Gemini. Anthropic and OpenAI-compatible chat APIs are also supported.
+
+The question is trimmed and limited to 4,000 characters by default. The reply is limited to 1,024 output tokens by default. Requests time out after sixty seconds. The system instruction asks Salibot to answer clearly and in the language/style intended for WhatsApp.
+
+For the simplest configuration, choose one provider and configure only that provider's key plus any necessary provider/model choice. Avoid setting several provider keys at the same time because the current key-selection order prefers Gemini, then the generic key, then Anthropic, then OpenAI.
+
+\warning{Questions are sent to an external AI provider. Do not send private messages, passwords, WhatsApp session data, or personal information unless the provider and your privacy policy permit it. AI answers may be incorrect and should not be treated as guaranteed facts.}
+
+\section{Files, storage, and privacy}
+
+\subsection{What is stored}
+
+\begin{longtable}{p{0.31\textwidth}p{0.63\textwidth}}
+\toprule
+\textbf{File or folder} & \textbf{Purpose and sensitivity}\\
+\midrule
+\endhead
+\texttt{bots.json} & List of bot names. Needed to recreate the same bot entries after restart.\\
+\texttt{allowed\_<bot>.json} & Allowed groups, tracked groups, and all feature/permission choices for one bot. Group identifiers may be private.\\
+\texttt{auth\_info\_<bot>/} & WhatsApp linked-device credentials. Highly sensitive: anyone who obtains usable credentials may be able to access the linked session.\\
+\texttt{auth.json} & Website administrator names and scrypt password records. The original password is not stored, but the file is still sensitive.\\
+\texttt{change.json} & Optional credential-change input. When valid content is found, it replaces the web user record and is then cleared. This is an advanced maintenance mechanism.\\
+\texttt{deleted\_cache/} & Temporary recovered media used by anti-delete and View Once features. May contain private images, videos, audio, stickers, or documents.\\
+\texttt{logs/server.log} & Runtime events, errors, commands, connection details, and web request paths. It may contain private operational identifiers.\\
+In-memory maps & Recent message copies, sessions, login-attempt counters, interactive command flows, connection states, and queued alerts. These disappear on restart.\\
+\bottomrule
+\end{longtable}
+
+\subsection{Persistent Railway storage}
+
+Without a persistent volume, files inside a replaced Railway container may disappear. When a Railway volume is attached, Railway supplies \texttt{RAILWAY\_VOLUME\_MOUNT\_PATH}; Salibot automatically uses it as the data directory. \texttt{APP\_DATA\_DIR} or \texttt{DATA\_DIR} can override that behavior for advanced deployments.
+
+The application code is packaged separately from runtime data. The Docker build excludes local passwords, linked-device folders, bot lists, logs, recovered media, tests, reports, and documentation from the image.
+
+\subsection{What to back up}
+
+For a recoverable service, back up the persistent volume containing:
+
+\begin{itemize}
+  \item \texttt{bots.json};
+  \item every \texttt{allowed\_<bot>.json};
+  \item every \texttt{auth\_info\_<bot>/} folder; and
+  \item \texttt{auth.json}.
+\end{itemize}
+
+Backups of \texttt{deleted\_cache/} and logs are optional and may increase privacy risk. Encrypt backups, restrict access, and define a deletion period. Never publish linked-device credentials or include them in support screenshots.
+
+\section{Website security in simple terms}
+
+\begin{longtable}{p{0.30\textwidth}p{0.64\textwidth}}
+\toprule
+\textbf{Protection} & \textbf{What it means}\\
+\midrule
+\endhead
+No default administrator password & A fresh installation requires an explicit web username and password instead of silently using \texttt{admin/admin}.\\
+Password hashing & The saved record uses scrypt with a random salt. Login recomputes the result instead of reading a plain password.\\
+Timing-safe comparison & Secret comparisons are designed to reduce information leaks through response timing.\\
+Turnstile & When both keys are configured, Cloudflare checks that the login visitor passed the challenge. The server validates the token; the visible widget alone is not trusted.\\
+Login throttling & Public and authentication routes have request limits. Five failed credential/Turnstile attempts cause a fifteen-minute login lock for that IP.\\
+Session cookie & The cookie is HTTP-only, SameSite=Lax, and Secure when the request uses HTTPS. It does not expose the token to normal page scripts.\\
+CSRF tokens & State-changing forms include a secret token so another website cannot silently submit actions through a logged-in browser.\\
+Security headers & The server sends CSP, HSTS, frame blocking, no-sniff, no-store, referrer, cross-origin, and permissions restrictions.\\
+Small form bodies & Form submissions larger than 10 KB are rejected.\\
+Escaping and validation & Names, errors, paths, and log text are escaped before display; bot identifiers and redirects are restricted.\\
+Protected administration & Every dashboard, bot-management route, log page, and administration API requires a valid session.\\
+Non-root container & The production process runs as the low-privilege \texttt{node} user rather than the container administrator.\\
+\bottomrule
+\end{longtable}
+
+The \texttt{/health} route is intentionally public so Railway can check the service. \texttt{robots.txt} asks search engines not to index the site, and the sitemap is empty. These are helpful signals, not access controls.
+
+\warning{The web password protects powerful controls. Use a unique, long password; keep Turnstile enabled; protect the Railway and GitHub accounts with multi-factor authentication; and never add a public unrestricted command shell to this site. A stolen web session or password would expose bot management and private logs.}
+
+\section{Pre-deployment security gate}
+
+Every push to \texttt{main}, pull request, weekly scheduled run, or manual workflow starts the GitHub security job. All stages are attempted, then one final gate blocks the release if a required stage failed.
+
+\begin{longtable}{p{0.07\textwidth}p{0.25\textwidth}p{0.60\textwidth}}
+\toprule
+\textbf{No.} & \textbf{Stage} & \textbf{Plain-language question}\\
+\midrule
+\endhead
+1 & Secrets detection & Did a verified password, token, or secret enter Git history?\\
+2 & Code quality & Does the JavaScript parse correctly and follow the ESLint safety rules?\\
+3 & SAST & Does static analysis find forbidden dangerous code patterns?\\
+4 & SCA & Do production dependencies contain known high/critical vulnerabilities?\\
+5 & Infrastructure scan & Does the Docker/workflow configuration contain a high/critical mistake?\\
+6 & License check & Are dependency licenses classified and approved by project policy?\\
+7 & Container scan & Does the exact built image contain a fixable high/critical vulnerability?\\
+8 & SBOM & Was a full machine-readable component inventory created?\\
+9 & Provenance & Did GitHub create signed evidence connecting the build to its source revision?\\
+10 & Image signing & Was the candidate image bundle signed and immediately verified?\\
+11 & Policy as code & Does the repository meet mandatory project rules such as non-root runtime and health check?\\
+12 & DAST & Does OWASP ZAP find a blocking problem while examining the running candidate?\\
+13 & Integration tests & Do the real web components pass the expected security behaviors?\\
+\bottomrule
+\end{longtable}
+
+The workflow uploads evidence for thirty days. The most important file is \texttt{gate-summary.json}. Deployment is allowed only when the final step says \texttt{SECURITY GATE PASSED}. The separate \textit{13-Stage Pre-Deployment Security Gate} PDF explains each stage in more technical detail.
+
+\section{Deployment on Railway}
+
+\subsection{Container build}
+
+The Dockerfile uses Node.js 24.20.0 on Debian Bookworm Slim. A build stage installs production dependencies and downloads required media tooling. The final stage copies only the production application and dependencies, removes npm from the runtime image to eliminate unnecessary vulnerable tooling, creates the log folder, and switches to the non-root \texttt{node} user.
+
+The container exposes port 8080. Railway normally supplies its own \texttt{PORT} value. A health check asks \texttt{/health} every thirty seconds after a short startup period.
+
+\subsection{Automatic deployment flow}
+
+\begin{enumerate}
+  \item A change is committed and pushed to GitHub.
+  \item GitHub builds and tests that revision.
+  \item If Railway \textbf{Wait for CI} is enabled, Railway waits for the GitHub status.
+  \item A red gate keeps the deployment blocked. The operator reads the failed stage and its report.
+  \item A green gate lets Railway build/start the new container.
+  \item Railway calls \texttt{/health}. If health succeeds, traffic moves to the new deployment.
+\end{enumerate}
+
+\subsection{Required Railway variables}
+
+For the intended production login with Cloudflare visible, configure exactly these four application secrets/settings:
+
+\begin{lstlisting}
+WEB_ADMIN_USER=<your administrator name>
+WEB_ADMIN_PASSWORD=<a long unique password>
+TURNSTILE_SITE_KEY=<the public key for this website>
+TURNSTILE_SECRET_KEY=<the private Cloudflare secret>
+\end{lstlisting}
+
+Railway supplies \texttt{PORT} automatically. If a volume is attached, Railway supplies the volume mount path automatically. The ordinary defaults for server name, server role, WhatsApp enabled state, and allowed hosts do not require custom variables.
+
+The old Turnstile secret appeared in earlier Git history and should not be reused. Rotate it in Cloudflare and keep the replacement only in Railway's secret variables.
+
+\section{First-time setup checklist}
+
+\begin{enumerate}
+  \item Create or open the Railway service connected to the repository's \texttt{main} branch.
+  \item Attach a persistent volume before linking WhatsApp, so linked-device credentials and settings survive container replacement.
+  \item In Cloudflare Turnstile, create a widget for the Railway/custom hostname and obtain a new key pair.
+  \item Add the four production variables listed above in Railway.
+  \item Enable Railway \textbf{Wait for CI}.
+  \item Protect the GitHub \texttt{main} branch and require \textbf{All 13 DevSecOps stages}.
+  \item Push the deployment revision and wait for a green security gate.
+  \item Open the website, complete Turnstile, and sign in.
+  \item Open \texttt{bot1} or create a clearly named bot.
+  \item Link the WhatsApp account with QR or phone code.
+  \item Select allowed destination groups and tracked source groups.
+  \item Review command access, command locations, alert destination, and every feature switch.
+  \item Send \texttt{.ping}, then verify the website dashboard and log console.
+  \item Make an encrypted backup plan for the Railway volume.
+\end{enumerate}
+
+\section{Routine operation}
+
+\subsection{Daily or frequent checks}
+
+\begin{itemize}
+  \item Confirm the website opens through HTTPS and Turnstile appears on login.
+  \item Confirm expected bots say \textbf{Connected}.
+  \item Read recent console errors without sharing screenshots that contain private identifiers.
+  \item Check RAM/disk percentages and investigate repeated resource alerts.
+  \item Confirm allowed and tracked groups still match operational needs.
+\end{itemize}
+
+\subsection{Before changing code}
+
+\begin{itemize}
+  \item Back up persistent bot/session data.
+  \item Test locally where possible.
+  \item Push through a pull request or reviewed commit.
+  \item Never bypass a red security gate merely to deploy faster.
+  \item Confirm the green run belongs to the exact commit Railway will deploy.
+\end{itemize}
+
+\subsection{After deployment}
+
+\begin{itemize}
+  \item Confirm Railway reports a healthy deployment.
+  \item Sign in again because in-memory sessions reset.
+  \item Check bot reconnection and re-link any logged-out account.
+  \item Send a harmless \texttt{.ping} command.
+  \item Check the console for startup or connection errors.
+\end{itemize}
+
+\section{Troubleshooting}
+
+\begin{longtable}{p{0.31\textwidth}p{0.63\textwidth}}
+\toprule
+\textbf{Symptom} & \textbf{What to check}\\
+\midrule
+\endhead
+Turnstile is missing & Confirm both Turnstile variables exist in the same Railway service and redeploy. One key alone disables the widget in the current code.\\
+``Security check failed'' & Confirm the site key belongs to the displayed hostname, the secret matches the same widget, and the token is not expired.\\
+``Security check unavailable'' & The server could not reach Cloudflare Siteverify or Cloudflare returned an unusable response. Check network and Railway logs.\\
+Correct web password does not work & If \texttt{auth.json} already exists, changing Railway variables does not automatically replace that saved record. Use the supported credential-change procedure or restore the correct protected data.\\
+Repeated login lock & Wait fifteen minutes and check that Railway/Cloudflare forwards the correct visitor IP. Five failures trigger the lock.\\
+Bot remains disconnected & Open the bot page, request a fresh QR/code, check the log console, and verify the linked account did not log the device out.\\
+No groups appear & The bot must be connected and already participate in those groups. Refresh after connection.\\
+Alerts go nowhere & Check alert destination. If it is allowed groups, select at least one allowed group. Confirm the selected bot is connected.\\
+Group changes are not reported & The group must be in tracked groups and the matching member/admin/group-setting switch must be enabled.\\
+Deleted content is not recovered & Salibot must have received the original while online. Check the matching anti-delete switch and tracked-group requirement. Some encrypted or View Once media cannot be recovered.\\
+\texttt{.u} does nothing & Only the owner may use it. Enable downloads, add an allowed group, use a supported URL, and check for private/expired/geo-blocked media or size limits.\\
+\texttt{.ask} does nothing & Configure the chosen provider and key. Check model name, provider choice, quota, timeout, and console errors.\\
+Speed test fails & Check outbound internet access and the configured speed-test URL. A provider/network failure can interrupt the stream.\\
+Console is empty & Wait for application events, confirm \texttt{logs/server.log} is writable, and remember logs may reset when an ephemeral container is replaced.\\
+GitHub gate is red & Open the failed numbered stage and download \texttt{security-reports-<commit>}. Read \texttt{gate-summary.json}, fix the cause, and push a new commit.\\
+Railway deploys before tests finish & Enable \textbf{Wait for CI} and require the exact GitHub status check on the deployment branch.\\
+Data disappears after redeploy & Attach a Railway volume and verify the application is using the automatically supplied mount path. Restore an encrypted backup if available.\\
+Restart loop & Read Railway runtime logs, check the first application error, verify required variables and volume permissions, and inspect health-check failures.\\
+\bottomrule
+\end{longtable}
+
+\section{Advanced settings reference}
+
+Most operators should leave this section alone. A listed default means no Railway variable is required unless the behavior must be changed.
+
+\begin{longtable}{p{0.31\textwidth}p{0.18\textwidth}p{0.43\textwidth}}
+\toprule
+\textbf{Setting} & \textbf{Default} & \textbf{Purpose}\\
+\midrule
+\endhead
+\texttt{PORT} & 8080 & Listening port; Railway normally supplies it automatically.\\
+\texttt{SERVER\_NAME} & Serveur Railway & Friendly server name used in alerts/status.\\
+\texttt{SERVER\_ROLE} & railway & Internal role label; current behavior is standalone.\\
+\texttt{WHATSAPP\_ENABLED} & true & Set false only for testing/scanning without WhatsApp connections.\\
+\texttt{COMMAND\_PREFIX} & period & Prefix before WhatsApp commands.\\
+\texttt{APP\_DATA\_DIR} / \texttt{DATA\_DIR} & automatic & Advanced override for runtime data location.\\
+\texttt{RAILWAY\_VOLUME\_MOUNT\_PATH} & supplied by Railway & Automatically selected when a Railway volume exists.\\
+\texttt{LOG\_FILE} & \texttt{logs/server.log} & Advanced override for the runtime log file.\\
+\texttt{ALLOWED\_HOSTS} / \texttt{WEB\_ALLOWED\_HOSTS} & unrestricted & Comma-separated hostnames accepted by the web server.\\
+\texttt{ALLOW\_LOCALHOST\_HOSTS} & true & Adds localhost forms when an allowed-host list exists.\\
+\nolinkurl{PUBLIC_ROUTE_RATE_LIMIT_MAX} & 60 per 15 min & Request limit for the public login page.\\
+\texttt{AUTH\_ROUTE\_RATE\_LIMIT\_MAX} & 20 per 15 min & Request limit for login submissions.\\
+\texttt{BOT\_AUTH\_RATE\_LIMIT\_MAX} & 12 per 15 min & Limit for QR, pairing, and disconnect operations.\\
+\texttt{DELETED\_CACHE\_MAX\_AGE\_DAYS} & 7 & Age at which recovered-media files are removed.\\
+\nolinkurl{DELETED_CACHE_CLEANUP_INTERVAL_MS} & 6 hours & How often old recovered-media files are checked.\\
+\texttt{RESOURCE\_ALERT\_INTERVAL\_MS} & 5 minutes & How often RAM/disk estimates are checked.\\
+\texttt{RESOURCE\_ALERT\_COOLDOWN\_MS} & 30 minutes & Minimum repeat interval while a resource stays high.\\
+\texttt{RESOURCE\_ALERT\_RAM\_PERCENT} & 85 & RAM alert threshold.\\
+\nolinkurl{RESOURCE_ALERT_DISK_PERCENT} & 85 & Application-disk alert threshold.\\
+\texttt{PENDING\_ALERT\_TTL\_MS} & 1 hour & How long an undelivered server alert remains useful.\\
+\texttt{SPEEDTEST\_DOWNLOAD\_URL} & Cloudflare 10 MB endpoint & Source used for the bandwidth test.\\
+\texttt{SPEEDTEST\_TIMEOUT\_MS} & 20 seconds & Network timeout for the speed test.\\
+\texttt{SPEEDTEST\_MAX\_BYTES} & 10 MB & Maximum data read by one speed test.\\
+\texttt{AI\_PROVIDER} & gemini & Selects Gemini, Anthropic, or OpenAI-compatible behavior.\\
+\texttt{GEMINI\_API\_KEY} / \texttt{AI\_API\_KEY} / \texttt{ANTHROPIC\_API\_KEY} / \texttt{OPENAI\_API\_KEY} & none & Credential used by \texttt{.ask}. Configure only what is needed.\\
+\texttt{AI\_MODEL} & provider-dependent & Overrides the default model name.\\
+\texttt{AI\_BASE\_URL} & provider endpoint & Advanced custom or compatible API address.\\
+\texttt{AI\_TIMEOUT\_MS} & 60 seconds & Maximum wait for an AI response.\\
+\texttt{AI\_MAX\_TOKENS} & 1,024 & Maximum requested answer length.\\
+\texttt{AI\_MAX\_QUESTION\_CHARS} & 4,000 & Maximum question length sent to the provider.\\
+\texttt{AI\_SYSTEM\_PROMPT} & Salibot instruction & Replaces the default assistant behavior instruction.\\
+\texttt{ANTHROPIC\_VERSION} & 2023-06-01 & Anthropic API-version header.\\
+\texttt{COBALT\_API\_URL(S)} & none & Enables one or more optional Cobalt download endpoints.\\
+\texttt{COBALT\_API\_KEY} & none & Optional credential for the configured Cobalt service.\\
+\texttt{INSTAGRAM\_COOKIES\_FILE} & none & Cookie file for protected Instagram media; highly sensitive.\\
+\nolinkurl{INSTAGRAM_COOKIES_FROM_BROWSER} & none & Advanced yt-dlp browser-cookie source.\\
+\texttt{YTDLP\_USER\_AGENT} & browser-like value & User agent used for social downloads.\\
+\texttt{YTDLP\_PROXY} & none & Optional proxy for yt-dlp traffic.\\
+\texttt{YTDLP\_FORMAT} & up-to-720p MP4 preference & Advanced yt-dlp format selection.\\
+\texttt{YTDLP\_MAX\_FILESIZE} & 80M & yt-dlp size limit.\\
+\texttt{YTDLP\_TIMEOUT\_MS} & 90 seconds & Maximum time for a yt-dlp operation.\\
+\nolinkurl{DOWNLOAD_REMOTE_BEFORE_SEND} & true & Downloads a remote Cobalt result locally before WhatsApp sending.\\
+\texttt{REMOTE\_DOWNLOAD\_MAX\_BYTES} & 80 MB & Maximum accepted downloaded media size.\\
+\bottomrule
+\end{longtable}
+
+\section{Known limitations and operational decisions}
+
+\begin{itemize}
+  \item WhatsApp behavior depends on an unofficial linked-device library and can change without notice.
+  \item The server is currently standalone; labels referring to active/standby remain in parts of the code, but it does not contact a primary peer.
+  \item Website sessions, message memory, flow state, and pending queues are not shared across instances and disappear on restart. Stored message text currently has no timed expiry, so long-running instances should also be watched for memory growth.
+  \item Anti-delete and View Once recovery are best effort and cannot recover content never received by the running bot.
+  \item The log file and deleted-media cache can grow between cleanup or redeployment; storage and privacy should be monitored.
+  \item Contact-photo and group event accuracy depends on events delivered by WhatsApp/Baileys.
+  \item Social downloads depend on third-party sites and may break when those sites change.
+  \item AI output depends on an external service, cost/quota, model availability, and provider policy.
+  \item The web console is read-only. A general-purpose browser shell is deliberately absent because it would create remote command execution capability.
+  \item The public health response is for Railway monitoring and should not be treated as a secret administration endpoint.
+  \item The web interface is generated directly by the Node server; there is no separate frontend build or database.
+\end{itemize}
+
+\section{Glossary}
+
+\begin{longtable}{p{0.25\textwidth}p{0.69\textwidth}}
+\toprule
+\textbf{Term} & \textbf{Simple meaning}\\
+\midrule
+\endhead
+API & A controlled way for one program to ask another program for data or an action.\\
+Bot & One independent WhatsApp linked-device connection managed by Salibot.\\
+Container & A packaged environment containing the application and the software it needs.\\
+Cookie & A small browser value used here to remember an authenticated session.\\
+CSRF & An attack where another website tries to make a logged-in browser submit an unwanted action. A private form token blocks it.\\
+Dashboard & The protected administration pages visible after login.\\
+Deployment & A specific version of the application running on Railway.\\
+Environment variable & A setting supplied outside the source code, commonly used for passwords and provider configuration.\\
+GitHub Actions & GitHub's automation system that runs this project's security checks.\\
+Health check & A small public request Railway uses to decide whether the application is alive.\\
+Log & A time-ordered record of what the application did or what error occurred.\\
+Persistent volume & Storage that remains when Railway replaces or restarts a container.\\
+Rate limit & A rule that stops one visitor from making too many requests in a short time.\\
+SBOM & A list of software components inside the built application image.\\
+Session & The server-side record that keeps an administrator signed in.\\
+Turnstile & Cloudflare's human-verification system used before password validation.\\
+Tracked group & A WhatsApp group watched as a source of events.\\
+Allowed group & A WhatsApp group normally used as a destination for alerts or downloaded media.\\
+\bottomrule
+\end{longtable}
+
+\section{Quick reference}
+
+\subsection{The safest normal configuration}
+
+\begin{itemize}
+  \item Four Railway variables: web username, strong web password, Turnstile site key, Turnstile secret.
+  \item One encrypted persistent Railway volume.
+  \item Wait for CI enabled and the GitHub security gate required.
+  \item Commands limited to the owner or group administrators unless broad access is intentional.
+  \item Only necessary groups selected as allowed/tracked.
+  \item Regular backups and a defined retention period for recovered media/logs.
+\end{itemize}
+
+\subsection{Where to go}
+
+\begin{tabularx}{\textwidth}{p{0.32\textwidth}X}
+\toprule
+\textbf{Need} & \textbf{Location}\\
+\midrule
+Sign in & Website root \texttt{/}\\
+See all bots/resources & \texttt{/dashboard}\\
+Read live application logs & \texttt{/logs} or \textbf{Logs serveur} in the sidebar\\
+Manage one bot & Select \textbf{Manage} beside that bot\\
+Choose destinations & Bot page $\rightarrow$ \textbf{Allowed groups}\\
+Choose monitored groups & Bot page $\rightarrow$ \textbf{Tracked groups}\\
+Connect WhatsApp & Bot page $\rightarrow$ QR code or phone number\\
+See deployment/build logs & Railway dashboard, not the Salibot web console\\
+See security result & GitHub Actions $\rightarrow$ \textbf{Pre-deployment security gate}\\
+\bottomrule
+\end{tabularx}
+
+\vfill
+\begin{center}
+\textcolor{purple}{\textbf{End of guide}}\\[2mm]
+This document describes the repository implementation as inspected on 10 September 2026.
+\end{center}
+
+\end{document}

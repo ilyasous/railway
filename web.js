@@ -7,8 +7,26 @@ const crypto = require('crypto');
 
 function resolveDataDir() {
   const configured = String(process.env.APP_DATA_DIR || process.env.DATA_DIR || process.env.RAILWAY_VOLUME_MOUNT_PATH || '').trim();
-  if (!configured) return __dirname;
-  return path.isAbsolute(configured) ? configured : path.join(__dirname, configured);
+  if (configured) {
+    const candidate = path.isAbsolute(configured) ? configured : path.join(__dirname, configured);
+    try {
+      fs.mkdirSync(candidate, { recursive: true });
+      fs.accessSync(candidate, fs.constants.R_OK | fs.constants.W_OK);
+      return candidate;
+    } catch (err) {
+      console.warn(`[DATA_DIR] Configured path "${candidate}" is not writable (${err.message}). Falling back to app directory.`);
+      return __dirname;
+    }
+  }
+  if (fs.existsSync('/data')) {
+    try {
+      fs.accessSync('/data', fs.constants.R_OK | fs.constants.W_OK);
+      return '/data';
+    } catch (err) {
+      console.warn(`[DATA_DIR] /data exists but is not writable (${err.message}).`);
+    }
+  }
+  return __dirname;
 }
 
 const DATA_DIR = resolveDataDir();
@@ -905,6 +923,9 @@ function getGlobalStyles(title = 'WhatsApp Bot') {
     .log-lines .btn.active { border-color: var(--purple-border); color: var(--purple); background: var(--purple-soft); }
     .log-view { background: var(--bg-side); border: 1px solid var(--border-soft); border-radius: var(--radius); min-height: 420px; max-height: calc(100vh - 280px); overflow: auto; padding: 16px; color: var(--text); font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace; font-size: 0.78rem; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
     .log-empty { color: var(--text-muted); }
+    .live-console-status { display: inline-flex; align-items: center; gap: 7px; color: var(--green); font-size: 0.8rem; font-weight: 800; }
+    .live-console-status::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; box-shadow: 0 0 8px currentColor; }
+    .live-console-status.paused { color: var(--text-faint); }
 
     .pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 11px; border-radius: 99px; font-size: 0.76rem; font-weight: 700; }
     .pill::before { content: ''; width: 6px; height: 6px; border-radius: 50%; }
@@ -1157,6 +1178,8 @@ module.exports = function startWebServer(ctx) {
   app.use((req, res, next) => {
     const startedAt = Date.now();
     res.on('finish', () => {
+      const routinePoll = req.path === '/health' || req.path === '/api/logs';
+      if (routinePoll && res.statusCode < 400) return;
       const method = sanitizeLogField(req.method);
       const url = sanitizeLogField(req.originalUrl || req.url);
       console.log(JSON.stringify({
@@ -1292,6 +1315,20 @@ module.exports = function startWebServer(ctx) {
   });
 
   // ── GET /dashboard : Server overview ──
+  app.get('/api/logs', (req, res) => {
+    const lines = clampNumber(req.query.lines, 100, 2000, 500);
+    const log = readLogTail(LOG_FILE, lines);
+    res.json({
+      exists: log.exists,
+      text: log.exists ? log.text : '',
+      error: log.exists ? '' : log.error,
+      size: log.size,
+      sizeLabel: formatLogSize(log.size),
+      updatedAt: log.mtime ? log.mtime.toISOString() : null,
+      truncated: log.truncated
+    });
+  });
+
   app.get('/logs', (req, res) => {
     const lines = clampNumber(req.query.lines, 100, 2000, 500);
     const log = readLogTail(LOG_FILE, lines);
@@ -1309,29 +1346,86 @@ ${shellOpen({
   active: 'logs',
   session: req.session,
   breadcrumb: 'Salibot / Logs',
-  title: 'Logs serveur',
-  desc: 'Consultez les journaux recents du superviseur et du bot sur ce serveur.',
-  actions: `<a class="btn btn-secondary" href="/logs?lines=${lines}"><span class="ico">${ICO.refresh}</span> Rafraichir</a>`
+  title: 'Console serveur',
+  desc: "Suivez en direct les journaux de l'application et des bots sur ce serveur.",
+  actions: `<span id="live-console-status" class="live-console-status">En direct</span><button id="live-console-toggle" class="btn btn-secondary" type="button">Pause</button>`
 })}
   <div class="panel">
     <div class="panel-head">
       <h2><span class="ico" style="color:var(--purple)">${ICO.logs}</span> ${escapeHtml(roleLabel(APP_ROLE))}</h2>
-      ${log.truncated ? '<span class="count-chip">tail limite</span>' : '<span class="count-chip">complet</span>'}
+      <span id="log-range" class="count-chip">${log.truncated ? 'tail limite' : 'complet'}</span>
     </div>
     <div class="panel-body">
       <div class="log-toolbar">
         <div class="log-meta">
           <span>Source <code>${escapeHtml(displayPath)}</code></span>
-          <span>Taille ${escapeHtml(formatLogSize(log.size))}</span>
-          <span>Mis a jour ${escapeHtml(updatedAt)}</span>
+          <span>Taille <span id="log-size">${escapeHtml(formatLogSize(log.size))}</span></span>
+          <span>Mis a jour <span id="log-updated">${escapeHtml(updatedAt)}</span></span>
         </div>
         <div class="log-lines" aria-label="Nombre de lignes">
           ${lineOptions}
         </div>
       </div>
-      <pre class="log-view${log.exists && log.text ? '' : ' log-empty'}">${escapeHtml(logText)}</pre>
+      <pre id="live-console-output" class="log-view${log.exists && log.text ? '' : ' log-empty'}" tabindex="0">${escapeHtml(logText)}</pre>
     </div>
   </div>
+  <script>
+    (() => {
+      const output = document.getElementById('live-console-output');
+      const status = document.getElementById('live-console-status');
+      const toggle = document.getElementById('live-console-toggle');
+      const size = document.getElementById('log-size');
+      const updated = document.getElementById('log-updated');
+      const range = document.getElementById('log-range');
+      let paused = false;
+      let loading = false;
+
+      const scrollToLatest = () => { output.scrollTop = output.scrollHeight; };
+      const refresh = async () => {
+        if (paused || loading || document.hidden) return;
+        loading = true;
+        const nearBottom = output.scrollHeight - output.scrollTop - output.clientHeight < 80;
+        try {
+          const response = await fetch('/api/logs?lines=${lines}', {
+            headers: { Accept: 'application/json' },
+            cache: 'no-store'
+          });
+          if (response.status === 401) {
+            window.location.assign('/');
+            return;
+          }
+          if (!response.ok) throw new Error('HTTP ' + response.status);
+          const log = await response.json();
+          output.textContent = log.exists ? (log.text || 'Log file is empty.') : log.error;
+          output.classList.toggle('log-empty', !log.exists || !log.text);
+          size.textContent = log.sizeLabel;
+          updated.textContent = log.updatedAt
+            ? new Date(log.updatedAt).toLocaleString('fr-FR', { hour12: false })
+            : 'n/a';
+          range.textContent = log.truncated ? 'tail limite' : 'complet';
+          status.textContent = 'En direct';
+          status.classList.remove('paused');
+          if (nearBottom) scrollToLatest();
+        } catch (error) {
+          status.textContent = 'Connexion perdue';
+          status.classList.add('paused');
+        } finally {
+          loading = false;
+        }
+      };
+
+      toggle.addEventListener('click', () => {
+        paused = !paused;
+        toggle.textContent = paused ? 'Reprendre' : 'Pause';
+        status.textContent = paused ? 'En pause' : 'En direct';
+        status.classList.toggle('paused', paused);
+        if (!paused) refresh();
+      });
+      document.addEventListener('visibilitychange', refresh);
+      scrollToLatest();
+      window.setInterval(refresh, 2000);
+    })();
+  </script>
 ${shellClose()}`);
   });
 

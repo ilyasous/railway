@@ -88,12 +88,73 @@ const WHATSAPP_ENABLED = !['0', 'false', 'no', 'off'].includes(
 );
 function resolveDataDir() {
   const configured = String(process.env.APP_DATA_DIR || process.env.DATA_DIR || process.env.RAILWAY_VOLUME_MOUNT_PATH || '').trim();
-  if (!configured) return __dirname;
-  return path.isAbsolute(configured) ? configured : path.join(__dirname, configured);
+  if (configured) {
+    const candidate = path.isAbsolute(configured) ? configured : path.join(__dirname, configured);
+    try {
+      fs.mkdirSync(candidate, { recursive: true });
+      fs.accessSync(candidate, fs.constants.R_OK | fs.constants.W_OK);
+      return candidate;
+    } catch (err) {
+      console.warn(`[DATA_DIR] Configured path "${candidate}" is not writable (${err.message}). Falling back to app directory.`);
+      return __dirname;
+    }
+  }
+  if (fs.existsSync('/data')) {
+    try {
+      fs.accessSync('/data', fs.constants.R_OK | fs.constants.W_OK);
+      return '/data';
+    } catch (err) {
+      console.warn(`[DATA_DIR] /data exists but is not writable (${err.message}).`);
+    }
+  }
+  return __dirname;
+}
+
+function migrateExistingData(targetDir) {
+  try {
+    if (!targetDir || path.resolve(targetDir) === path.resolve(__dirname)) return;
+    if (!fs.existsSync(targetDir)) {
+      fs.mkdirSync(targetDir, { recursive: true });
+    }
+    const entries = fs.readdirSync(__dirname, { withFileTypes: true });
+    for (const entry of entries) {
+      const srcPath = path.join(__dirname, entry.name);
+      const destPath = path.join(targetDir, entry.name);
+
+      const isDataFile = entry.isFile() && (
+        entry.name === 'bots.json' ||
+        entry.name === 'auth.json' ||
+        entry.name === 'change.json' ||
+        entry.name === 'allowed-groups.json' ||
+        /^allowed_.*\.json$/.test(entry.name)
+      );
+
+      const isAuthDir = entry.isDirectory() && entry.name.startsWith('auth_info_');
+
+      if (isDataFile && !fs.existsSync(destPath)) {
+        try {
+          fs.copyFileSync(srcPath, destPath);
+          console.log(`[PERSISTENCE] Migrated ${entry.name} to persistent storage at ${destPath}`);
+        } catch (copyErr) {
+          console.error(`[PERSISTENCE] Could not migrate ${entry.name}:`, copyErr.message);
+        }
+      } else if (isAuthDir && !fs.existsSync(destPath)) {
+        try {
+          fs.cpSync(srcPath, destPath, { recursive: true });
+          console.log(`[PERSISTENCE] Migrated ${entry.name} directory to persistent storage at ${destPath}`);
+        } catch (copyErr) {
+          console.error(`[PERSISTENCE] Could not migrate ${entry.name}:`, copyErr.message);
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[PERSISTENCE] Error checking/migrating data files:', err.message);
+  }
 }
 
 const DATA_DIR = resolveDataDir();
 try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch (err) { }
+migrateExistingData(DATA_DIR);
 function dataPath(fileName) { return path.join(DATA_DIR, fileName); }
 
 const DELETED_CACHE_FOLDER = dataPath('deleted_cache');
@@ -507,9 +568,17 @@ function getContainerDiskUsage() {
   let diskInfo = { percent: 'N/A', used: 'N/A', total: '1024 MB' };
   const MAX_DISK_BYTES = 1 * 1024 * 1024 * 1024;
   try {
-    const duOutput = execFileSync('du', ['-sb', __dirname], { encoding: 'utf8' }).trim().split(/\s+/);
-    if (duOutput.length > 0) {
-      const usedBytes = parseInt(duOutput[0], 10);
+    const duTargets = [__dirname];
+    if (DATA_DIR && path.resolve(DATA_DIR) !== path.resolve(__dirname) && fs.existsSync(DATA_DIR)) {
+      duTargets.push(DATA_DIR);
+    }
+    const duLines = execFileSync('du', ['-sb', ...duTargets], { encoding: 'utf8' }).trim().split(/\r?\n/);
+    let usedBytes = 0;
+    for (const line of duLines) {
+      const parts = line.trim().split(/\s+/);
+      if (parts[0]) usedBytes += parseInt(parts[0], 10) || 0;
+    }
+    if (usedBytes > 0) {
       diskInfo.used = `${(usedBytes / (1024 ** 2)).toFixed(1)} MB`;
       diskInfo.percent = `${((usedBytes / MAX_DISK_BYTES) * 100).toFixed(1)}%`;
     }
